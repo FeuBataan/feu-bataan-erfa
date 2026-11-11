@@ -1,0 +1,75 @@
+import { dispatch, type ApiRequest } from './api';
+import { bootstrapAdmin as bootstrap } from './auth';
+import { cleanImportedData } from './admin';
+import { all, setupSchema } from './store';
+import { beginPerformance, performanceSnapshot, timed } from './performance';
+import { previewRfaReset, resetRfas } from './resetRfas';
+
+function json(value: unknown): GoogleAppsScript.Content.TextOutput {
+  const serialized = timed('serializationMs', () => JSON.stringify(value));
+  const performance = performanceSnapshot();
+  const output = timed('responsePreparationMs', () => ContentService.createTextOutput(performance
+    ? JSON.stringify({ ...(value as Record<string, unknown>), performance }) : serialized).setMimeType(ContentService.MimeType.JSON));
+  const final = performanceSnapshot();
+  if (final) console.log('[eRFA PERF]', JSON.stringify(final));
+  return output;
+}
+
+function doGet(event?: GoogleAppsScript.Events.DoGet): GoogleAppsScript.Content.TextOutput {
+  beginPerformance(event?.parameter?.perf === '1');
+  return json({ ok: true, data: dispatch({ action: 'health' }) });
+}
+
+function doPost(event: GoogleAppsScript.Events.DoPost): GoogleAppsScript.Content.TextOutput {
+  const requestStarted = Date.now();
+  beginPerformance(false);
+  try {
+    const request = JSON.parse(event?.postData?.contents || '{}') as ApiRequest;
+    beginPerformance(request.performance === true, requestStarted);
+    return json({ ok: true, data: dispatch(request) });
+  } catch (error) {
+    console.error(error instanceof Error ? error : String(error));
+    const typed = error as Error & { code?: string };
+    return json({ ok: false, error: { code: typed.code || 'SERVER_ERROR', message: typed.message || 'The request could not be completed.' } });
+  }
+}
+
+function setupDatabase(): unknown {
+  return setupSchema();
+}
+
+function bootstrapAdmin(email: string, fullName: string): unknown {
+  setupSchema();
+  return bootstrap(email, fullName);
+}
+
+// One-click clean for the Apps Script editor: keeps ALL admins, deletes
+// every other user + all departments/heads. Run once, then import the new list.
+function cleanAllNow(): unknown {
+  setupSchema();
+  const admins = (all('USERS') as Array<{ IS_ADMIN?: unknown; EMAIL?: string; FULL_NAME?: string; USER_ID?: string }>).filter((u) => String(u.IS_ADMIN).toUpperCase() === 'TRUE' || u.IS_ADMIN === true);
+  const actor = (admins[0] || { USER_ID: 'admin', FULL_NAME: 'Admin', EMAIL: '', IS_ADMIN: true }) as never;
+  return cleanImportedData(actor as never, { confirm: 'DELETE' });
+}
+
+// After the pilot: run previewRfaResetNow first to see what would be removed,
+// then resetAllRfasKeepAccounts to clear every RFA. Accounts, departments, heads,
+// approval matrix, settings and budgets are kept, and a backup copy is made first.
+function previewRfaResetNow(): unknown {
+  const counts = previewRfaReset();
+  console.log('[eRFA] RFA reset preview (rows that would be removed):', JSON.stringify(counts));
+  return counts;
+}
+
+function resetAllRfasKeepAccounts(): unknown {
+  const admins = (all('USERS') as Array<{ IS_ADMIN?: unknown; EMAIL?: string; FULL_NAME?: string }>).filter((u) => String(u.IS_ADMIN).toUpperCase() === 'TRUE' || u.IS_ADMIN === true);
+  const actor = { FULL_NAME: admins[0]?.FULL_NAME || 'Administrator', EMAIL: admins[0]?.EMAIL || Session.getEffectiveUser().getEmail() };
+  const result = resetRfas(actor);
+  console.log('[eRFA] RFA reset complete:', JSON.stringify(result));
+  return result;
+}
+
+// The production bundle keeps implementation code inside an IIFE. Store only
+// intended Apps Script entry points here; build.mjs emits top-level forwarding
+// declarations so Apps Script can discover them in the editor and Web App.
+Object.assign(globalThis, { __erfaEntrypoints: { doGet, doPost, setupDatabase, bootstrapAdmin, cleanAllNow, previewRfaResetNow, resetAllRfasKeepAccounts } });

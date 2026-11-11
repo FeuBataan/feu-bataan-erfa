@@ -1,0 +1,38 @@
+import type { ApprovalStep, RfaStatus } from './types';
+
+export const statusLabel = (status: RfaStatus | string): string => ({
+  DRAFT: 'Draft', SUBMITTED: 'Submitted', PENDING_RECOMMENDING_APPROVAL: 'Recommending Approval', PENDING_REVIEW: 'Reviewed & Noted',
+  PENDING_AUTHORITY_APPROVAL: 'Authority Approval', RETURNED: 'Returned', DISAPPROVED: 'Disapproved', APPROVED: 'Approved',
+  IMPLEMENTATION: 'Implementation', CLOSED: 'Closed', CANCELLED: 'Cancelled', EXCEPTION: 'Workflow Exception'
+}[status] ?? status.replaceAll('_', ' '));
+
+export const stepLabel = (step: ApprovalStep | string): string => ({
+  PREPARED_BY: 'Prepared By', RECOMMENDING_APPROVAL: 'Recommending Approval', REVIEWED_AND_NOTED: 'Reviewed and Noted By', REVIEWED_BY: 'Reviewed By', NOTED_BY: 'Noted By', INVOLVED_DEPARTMENT_HEAD: 'Involved Department Head', APPROVED_BY: 'Approved By'
+}[step] ?? step.replaceAll('_', ' '));
+
+export const expenseClassificationLabel = (value?: string | null): string => value === 'OPEX' ? 'OPEX — Operating Expenditure' : value === 'CAPEX' ? 'CAPEX — Capital Expenditure' : value ? String(value) : '—';
+
+/** Normalize imported "LAST, FIRST M." names to consistent Title Case for display. */
+export const displayName = (value?: string | null): string => {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '—';
+  // "LAST, FIRST M." -> "Last, First M." ; "FIRST LAST" stays Title Case
+  const parts = raw.split(',').map((p) => p.trim());
+  const title = (text: string) => text.replace(/\b\w+/g, (w) => {
+    if (/^[A-Z]\.$/.test(w)) return w; // initial
+    if (/^[A-Z]{2,}$/.test(w)) return w.charAt(0) + w.slice(1).toLowerCase();
+    return w;
+  }).replace(/\bMc\w+/g, (w) => 'Mc' + w.slice(2).charAt(0).toUpperCase() + w.slice(3));
+  return parts.map((p) => p ? title(p) : '').join(', ');
+};
+
+/** Produces the only value accepted by an HTML input[type="date"]. */
+export const dateInputValue = (value: string): string => /^(\d{4}-\d{2}-\d{2})(?:T.*)?$/.exec(value.trim())?.[1] ?? '';
+
+/** Canonical FY representation used by the backend and all budget-facing UI. */
+export const fiscalYearPattern = '[0-9]{4}';
+export const isFiscalYear = (value: string): boolean => /^[0-9]{4}$/.test(value);
+
+export const money = (value: number | string): string => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(Number(value || 0));
+export const date = (value: string): string => value ? new Intl.DateTimeFormat('en-PH', { dateStyle: 'medium' }).format(new Date(value.length === 10 ? `${value}T00:00:00` : value)) : '—';
+export const dateTime = (value: string): string => value ? new Intl.DateTimeFormat('en-PH', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '—';
