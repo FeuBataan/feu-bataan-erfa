@@ -3,7 +3,8 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
-  // GitHub Pages project path; override with VITE_BASE_PATH (e.g. '/' for a custom domain).
+  // GitHub Pages serves the site under /<repository-name>/. The workflow passes it in, so the
+  // build works under any account or repository name; '/feu-bataan-erfa/' is the local default.
   base: process.env.VITE_BASE_PATH || '/feu-bataan-erfa/',
   build: {
     sourcemap: true,

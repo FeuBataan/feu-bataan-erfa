@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { api, peek } from '../api';
 import { useAuth } from '../auth';
 import { ErrorNotice, StatusBadge } from '../components';
-import { date, money, stepLabel } from '../format';
+import { currentSchoolYear, date, money, schoolYearLabel } from '../format';
 import type { Rfa } from '../types';
 
 type DashboardExpenses = { totals: { totalOpex: number; totalCapex: number; total: number; rfaCount: number }; deptRows: Array<{ departmentName: string; total: number; rfaCount: number }> };
@@ -83,7 +83,7 @@ export function DashboardPage() {
     </section>
 
     {user?.IS_ADMIN && expenses && <section className="panel budget-dashboard">
-      <header className="panel-header"><div><span className="eyebrow orange">EXPENSE MONITORING</span><h2>Current fiscal year</h2></div><Link to="/admin/expense-monitoring">Expense monitoring <ArrowRight size={14} /></Link></header>
+      <header className="panel-header"><div><span className="eyebrow orange">EXPENSE MONITORING</span><h2>{schoolYearLabel(currentSchoolYear())} · current school year</h2></div><Link to="/admin/expense-monitoring">Expense monitoring <ArrowRight size={14} /></Link></header>
       <div className="metric-grid"><MetricValue label="Total OPEX" value={money(expenses.totals.totalOpex)} /><MetricValue label="Total CAPEX" value={money(expenses.totals.totalCapex)} /><MetricValue label="Combined Total" value={money(expenses.totals.total)} /><MetricValue label="RFAs" value={String(expenses.totals.rfaCount)} /></div>
       {(expenses.deptRows?.length ?? 0) > 0 && <p className="muted">{expenses.deptRows.slice(0, 4).map((row) => `${row.departmentName}: ${money(row.total)} (${row.rfaCount} RFAs)`).join(' · ')}</p>}
     </section>}
@@ -133,7 +133,7 @@ export function Empty({ title, text }: { title: string; text: string }) {
   </div>;
 }
 
-export function RfaTable({ rfas, review = false }: { rfas: Rfa[]; review?: boolean }) {
+export function RfaTable({ rfas, review = false, schoolYear = '' }: { rfas: Rfa[]; review?: boolean; schoolYear?: string }) {
   return <div className="table-wrap">
     <table>
       <thead>
@@ -142,7 +142,6 @@ export function RfaTable({ rfas, review = false }: { rfas: Rfa[]; review?: boole
           <th>Request</th>
           <th>Department</th>
           <th>Requested Amount</th>
-          {review && <th>Current Step</th>}
           <th>Status</th>
           <th>Date Filed</th>
           <th aria-label="Action" />
@@ -150,17 +149,16 @@ export function RfaTable({ rfas, review = false }: { rfas: Rfa[]; review?: boole
       </thead>
       <tbody>
         {rfas.map((rfa) => <tr key={rfa.RFA_ID}>
-          <td data-label="RFA Number"><b>{rfa.RFA_NUMBER}</b></td>
+          <td data-label="RFA Number">{rfa.RFA_NUMBER ? <b>{rfa.RFA_NUMBER}</b> : <span className="draft-number">Draft</span>}</td>
           <td data-label="Request">
             <span className="cell-primary">{rfa.REQUEST_TITLE || 'Untitled draft'}</span>
             <small>{rfa.REQUESTED_BY}</small>
           </td>
           <td data-label="Department">{rfa.DEPARTMENT_NAME}</td>
           <td data-label="Requested Amount">{money(rfa.REQUESTED_AMOUNT ? rfa.REQUESTED_AMOUNT / 100 : rfa.BUDGET_ALLOCATION)}</td>
-          {review && <td data-label="Current Step">{rfa.CURRENT_STEP ? stepLabel(rfa.CURRENT_STEP) : '—'}</td>}
           <td data-label="Status"><StatusBadge status={rfa.STATUS} /></td>
           <td data-label="Date Filed">{date(rfa.DATE_FILED)}</td>
-          <td><Link className="row-link" to={`/rfa/${rfa.RFA_ID}`}>{review ? 'Review' : 'View'} <ArrowRight size={14} /></Link></td>
+          <td><Link className="row-link" to={`/rfa/${rfa.RFA_ID}${schoolYear ? `?sy=${schoolYear}` : ''}`}>{review ? 'Review' : 'View'} <ArrowRight size={14} /></Link></td>
         </tr>)}
       </tbody>
     </table>

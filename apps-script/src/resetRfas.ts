@@ -1,5 +1,6 @@
 import { SHEETS } from './constants';
 import { audit } from './audit';
+import { backupDatabase } from './backup';
 import { getDatabase, getSetting, resetPerRequestCache, setSetting } from './store';
 import type { SessionUser } from './types';
 
@@ -24,7 +25,7 @@ const CLEAR_RFA_LINKED: SheetName[] = ['RFA_AUDIT', 'BUDGET_TRANSACTIONS'];
 
 export interface RfaResetCounts { [sheet: string]: number }
 
-function sheetRows(name: SheetName): { sheet: GoogleAppsScript.Spreadsheet.Sheet | null; headers: string[]; values: unknown[][] } {
+export function sheetRows(name: SheetName): { sheet: GoogleAppsScript.Spreadsheet.Sheet | null; headers: string[]; values: unknown[][] } {
   const sheet = getDatabase().getSheetByName(name);
   const headers = [...SHEETS[name]] as string[];
   if (!sheet || sheet.getLastRow() < 2) return { sheet, headers, values: [] };
@@ -44,7 +45,7 @@ export function previewRfaReset(): RfaResetCounts {
 }
 
 /** Rewrite a sheet keeping only rows for which keep() is true. Returns rows removed. */
-function keepOnly(name: SheetName, keep: (headers: string[], row: unknown[]) => boolean): number {
+export function keepOnly(name: SheetName, keep: (headers: string[], row: unknown[]) => boolean): number {
   const { sheet, headers, values } = sheetRows(name);
   if (!sheet || values.length === 0) return 0;
   const kept = values.filter((row) => keep(headers, row));
@@ -55,12 +56,9 @@ function keepOnly(name: SheetName, keep: (headers: string[], row: unknown[]) => 
   return removed;
 }
 
-function backupDatabase(): { backupId: string; backupName: string } {
-  const db = getDatabase();
-  const stamp = Utilities.formatDate(new Date(), db.getSpreadsheetTimeZone() || 'Asia/Manila', 'yyyy-MM-dd HHmm');
-  const backupName = `eRFA Database - backup before RFA reset ${stamp}`;
-  const copy = DriveApp.getFileById(db.getId()).makeCopy(backupName);
-  return { backupId: copy.getId(), backupName };
+function backupBeforeReset(): { backupId: string; backupName: string } {
+  const copy = backupDatabase('before RFA reset');
+  return { backupId: copy.id, backupName: copy.name };
 }
 
 /** Move pilot attachment files and RFA folders to the Drive trash. Renaming first keeps
@@ -81,7 +79,8 @@ function trashAttachments(attachmentRows: Row[]): { files: number; folders: numb
       const rfaFolders = years.next().getFolders();
       while (rfaFolders.hasNext()) {
         const folder = rfaFolders.next();
-        if (!/^RFA-\d{4}-\d+$/.test(folder.getName())) continue;
+        // Numbered RFA folders and unsubmitted draft folders (DRAFT-<id>).
+        if (!/^(RFA-\d{4}-\d+|DRAFT-.+)$/.test(folder.getName())) continue;
         folder.setName(`${folder.getName()} (pilot, removed)`);
         folder.setTrashed(true);
         folders += 1;
@@ -96,7 +95,7 @@ export function resetRfas(actor: Pick<SessionUser, 'FULL_NAME' | 'EMAIL'>): Reco
   if (!lock.tryLock(30000)) throw new Error('eRFA is busy. Try again in a minute.');
   try {
     const before = previewRfaReset();
-    const backup = backupDatabase();
+    const backup = backupBeforeReset();
 
     const { headers: attachmentHeaders, values: attachmentValues } = sheetRows('RFA_ATTACHMENTS');
     const attachmentRows = attachmentValues.map((row) => Object.fromEntries(attachmentHeaders.map((h, i) => [h, row[i]])));

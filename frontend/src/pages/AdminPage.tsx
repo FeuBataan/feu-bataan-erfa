@@ -1,8 +1,9 @@
 import { Building2, GitBranch, Pencil, Plus, Users } from 'lucide-react';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { Dialog, ErrorNotice, Spinner, SuccessNotice } from '../components';
-import { dateTime, money, stepLabel } from '../format';
+import { date, dateTime, money, stepLabel } from '../format';
 import type { AdminData, Department, Matrix, User } from '../types';
 
 type Tab = 'users'|'departments'|'matrix'|'logs';
@@ -18,7 +19,10 @@ const emptyAuditFilters = { fromDate: '', toDate: '', rfaNumber: '', requester: 
 
 export function AdminPage() {
   const [data, setData] = useState<AdminData | null>(null);
-  const [tab, setTab] = useState<Tab>('users');
+  const [params] = useSearchParams();
+  const [tab, setTab] = useState<Tab>((params.get('tab') as Tab) || 'users');
+  const handOverFrom = params.get('handover') || '';
+  const handOverRfa = params.get('rfa') || '';
   const [editing, setEditing] = useState<User|Department|Matrix|'new'|null>(null);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -55,13 +59,14 @@ export function AdminPage() {
     <section className="panel flush admin-panel">
       {tab !== 'logs' && <header className="panel-header">
         <div>
-          <h2>{tab === 'users' ? 'Registered users' : tab === 'departments' ? 'Departments & heads' : 'Official approval matrix'}</h2>
-          <p>{tab === 'matrix' ? 'Recommending, Reviewed and Noted, and Approved By from this matrix per department. Mandatory officials are set under Official Approval Settings. Conditionals and threshold are set below.' : tab === 'departments' ? 'Set department heads (multiple per department allowed) and academic classification.' : 'No public registration or destructive deletion.'}</p>
+          <h2>{tab === 'users' ? 'Registered users' : tab === 'departments' ? 'Departments & heads' : 'Approval matrix (optional)'}</h2>
+          <p>{tab === 'matrix' ? 'Extra approvers for one specific department. Most schools need none: department heads (Departments tab) and Approval Roles (below) already cover every RFA.' : tab === 'departments' ? 'Set department heads (multiple per department allowed) and academic classification.' : 'No public registration or destructive deletion.'}</p>
         </div>
         <button className="button primary" onClick={() => setEditing('new')}><Plus size={16}/> Add {tab === 'users' ? 'User' : tab === 'departments' ? 'Department' : 'Route'}</button>
       </header>}
       {tab === 'users' && <>
-        <UsersImportPanel onSaved={() => { setSuccess('Import saved.'); load(); }} onError={setError} />
+        <details className="setup-tools"><summary>Setup tools (one-time import and clean-up)</summary><UsersImportPanel onSaved={() => { setSuccess('Import saved.'); load(); }} onError={setError} /></details>
+        <HandOverPanel key={`${handOverFrom}-${handOverRfa}`} users={data.users} initialFrom={handOverFrom} initialRfaId={handOverRfa} onDone={(message) => { setSuccess(message); load(); }} onError={setError} />
         <UsersTable users={data.users} departments={data.departments} edit={setEditing} />
       </>}
       {tab === 'departments' && <>
@@ -69,10 +74,10 @@ export function AdminPage() {
         <ApprovalSettingsPanel data={data} onSaved={() => { setSuccess('Approval settings saved.'); load(); }} onError={setError} />
       </>}
       {tab === 'matrix' && <>
-        <MatrixTable matrix={data.matrix} users={data.users} departments={data.departments} edit={setEditing} />
+        <MatrixTable matrix={data.matrix} users={data.users} departments={data.departments} edit={setEditing} onChanged={(message) => { setSuccess(message); load(); }} onError={setError} />
         <ApprovalSettingsPanel data={data} onSaved={() => { setSuccess('Approval settings saved.'); load(); }} onError={setError} />
       </>}
-      {tab === 'logs' && <Logs data={data} />}
+      {tab === 'logs' && <><MaintenancePanel /><Logs data={data} /></>}
     </section>
 
     {editing && <Dialog
@@ -193,67 +198,206 @@ function DepartmentsTable({ departments, users, heads, edit, onSaved, onError }:
   </>;
 }
 
-function ApprovalSettingsPanel({ data, onSaved, onError }: { data: AdminData; onSaved: () => void; onError: (e: string) => void }) {
-  const settings = data.settings ?? { presidentThresholdPhp: '50000', reviewedMandatoryUserId: '', approvedMandatoryUserIds: '', vpAcademicUserId: '', presidentUserId: '', principalUserId: '', vpAdminFinanceEmail: '', presidentEmail: '' };
-  const [form, setForm] = useState(settings);
-  const [saving, setSaving] = useState(false);
-  useEffect(() => { setForm(settings); }, [JSON.stringify(settings)]);
-  const set = (key: keyof typeof form, value: string) => setForm((cur) => ({ ...cur, [key]: value }));
-  async function save() {
-    setSaving(true);
-    try { await api('admin.settings.save', { ...form }); onSaved(); }
-    catch (e) { onError(e instanceof Error ? e.message : 'Could not save settings.'); }
-    finally { setSaving(false); }
+
+type HandOverResult = { preview: boolean; count: number; moved: Array<{ rfaId: string; rfaNumber: string; title: string; steps: string[] }>; skipped: Array<{ rfaNumber: string; reason: string }> };
+
+/** Hand pending approvals from someone who is away or has left to another approver. */
+function HandOverPanel({ users, initialFrom, initialRfaId, onDone, onError }: { users: User[]; initialFrom: string; initialRfaId: string; onDone: (message: string) => void; onError: (e: string) => void }) {
+  const [fromUserId, setFrom] = useState(initialFrom);
+  const [toUserId, setTo] = useState('');
+  const [reason, setReason] = useState('');
+  const [rfaId, setRfaId] = useState(initialRfaId);
+  const [preview, setPreview] = useState<HandOverResult | null>(null);
+  const [working, setWorking] = useState(false);
+  useEffect(() => { setPreview(null); }, [fromUserId, rfaId]);
+  const everyone = users.map((u) => ({ value: u.USER_ID, label: `${u.FULL_NAME} - ${u.EMAIL}${u.ACTIVE ? '' : ' (inactive)'}` }));
+  const approvers = users.filter((u) => u.ACTIVE && u.CAN_APPROVE_RFA && u.USER_ID !== fromUserId).map((u) => ({ value: u.USER_ID, label: `${u.FULL_NAME} - ${u.EMAIL}` }));
+  async function run(previewOnly: boolean) {
+    setWorking(true);
+    try {
+      const result = await api<HandOverResult>('admin.approvals.reassign', { fromUserId, toUserId, reason, rfaId, preview: previewOnly });
+      if (previewOnly) setPreview(result);
+      else { setPreview(null); setReason(''); onDone(`Handed over ${result.count} RFA${result.count === 1 ? '' : 's'}${result.skipped.length ? `; ${result.skipped.length} skipped` : ''}. The new approver was emailed where it is their turn.`); }
+    } catch (e) { onError(e instanceof Error ? e.message : 'Could not hand over approvals.'); }
+    finally { setWorking(false); }
   }
-  const approverOptions = data.users.filter((u) => u.ACTIVE && u.CAN_APPROVE_RFA);
-  const userSelect = (key: keyof typeof form, label: string) => (
-    <label className="field"><span>{label}</span>
-      <SearchableSelect
-        value={String(form[key] ?? '')}
-        options={approverOptions.map((u) => ({ value: u.USER_ID, label: `${u.FULL_NAME} - ${u.EMAIL}` }))}
-        placeholder="Search name or email…"
-        onChange={(v) => set(key, v)}
-      />
-    </label>
-  );
-  const approvedIds = String(form.approvedMandatoryUserIds ?? '').split(',').map((s) => s.trim()).filter(Boolean);
-  const setApprovedId = (slot: number, userId: string) => {
-    const next = [...approvedIds];
-    if (userId) next[slot] = userId; else next.splice(slot, 1);
-    set('approvedMandatoryUserIds', next.filter(Boolean).join(','));
-  };
-  return <section className="form-card" style={{ marginTop: '1rem' }}>
-    <h3>Official Approval Settings</h3>
-    <p className="muted">Choose the school's officials here (or in the Approval Matrix). RFAs cannot be submitted until the Reviewed and Noted and Approved By officials are set. Threshold is inclusive.</p>
+  return <section className="form-card handover-panel">
+    <h3>Hand over pending approvals</h3>
+    <p className="muted">When an approver is on leave or has left, move the RFAs waiting on them to someone else. Approvals already given are never changed, and every hand-over is recorded in the audit log.</p>
     <div className="form-grid">
-      <label className="field"><span>Presidential threshold (PHP)</span><input inputMode="decimal" value={form.presidentThresholdPhp} onChange={(e) => set('presidentThresholdPhp', e.target.value)} /></label>
-      {userSelect('reviewedMandatoryUserId', 'Reviewed and Noted mandatory')}
-      <label className="field"><span>Approved mandatory — Finance official (emailed first)</span><SearchableSelect value={approvedIds[0] ?? ''} options={approverOptions.map((u) => ({ value: u.USER_ID, label: `${u.FULL_NAME} - ${u.EMAIL}` }))} placeholder="Search name or email…" onChange={(v) => setApprovedId(0, v)} /><small>Always together with the VP for Admin and Finance below.</small></label>
-      <label className="field"><span>Approved mandatory — VP for Admin and Finance</span><SearchableSelect value={approvedIds[1] ?? ''} options={approverOptions.map((u) => ({ value: u.USER_ID, label: `${u.FULL_NAME} - ${u.EMAIL}` }))} placeholder="Search name or email…" onChange={(v) => setApprovedId(1, v)} /><small>Emailed after the Finance official approves.</small></label>
-      {userSelect('vpAcademicUserId', 'VP for Academic Affairs (academic departments)')}
-      {userSelect('presidentUserId', 'President (at or above the threshold)')}
-      {userSelect('principalUserId', 'JHS/SHS Principal (optional)')}
-      <label className="field"><span>VP for Admin and Finance email (optional, if not picked above)</span><input type="email" value={form.vpAdminFinanceEmail ?? ''} onChange={(e) => set('vpAdminFinanceEmail', e.target.value)} /></label>
-      <label className="field"><span>President email (optional, if not picked above)</span><input type="email" value={form.presidentEmail ?? ''} onChange={(e) => set('presidentEmail', e.target.value)} /></label>
-      <p className="muted">The two emails must be different accounts. Procurement is view-only by department (code PPU or a name containing "Procurement") — no approver to set.</p>
+      <label className="field"><span>From (away or left)</span><SearchableSelect value={fromUserId} options={everyone} placeholder="Search name or email…" onChange={setFrom} /></label>
+      <label className="field"><span>To (takes over)</span><SearchableSelect value={toUserId} options={approvers} placeholder="Search name or email…" onChange={setTo} /></label>
+      <label className="field full"><span>Reason</span><input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. On leave until June 30" /></label>
     </div>
-    <button className="button primary" disabled={saving} onClick={() => void save()}>Save approval settings</button>
+    {rfaId && <p className="muted">Only for one RFA (opened from its page). <button type="button" className="link-button" onClick={() => setRfaId('')}>Hand over all of this person's waiting RFAs instead</button></p>}
+    {preview && <div className="handover-preview">
+      <b>{preview.count ? `${preview.count} waiting RFA${preview.count === 1 ? '' : 's'} will move:` : 'This person has no waiting RFAs to hand over.'}</b>
+      {preview.moved.length > 0 && <ul>{preview.moved.map((item) => <li key={item.rfaId}>{item.rfaNumber || 'Draft'} · {item.title || 'Untitled'} <small>({item.steps.map(stepLabel).join(', ')})</small></li>)}</ul>}
+      {preview.skipped.length > 0 && <p className="muted">{preview.skipped.length} will be skipped: {preview.skipped.map((s) => `${s.rfaNumber} (${s.reason})`).join('; ')}</p>}
+    </div>}
+    <div className="form-actions">
+      <button type="button" className="button secondary" disabled={!fromUserId || working} onClick={() => void run(true)}>Show waiting RFAs</button>
+      <button type="button" className="button primary" disabled={!fromUserId || !toUserId || reason.trim().length < 3 || working || (preview !== null && preview.count === 0)} onClick={() => void run(false)}>{working ? 'Working…' : 'Hand over'}</button>
+    </div>
   </section>;
 }
 
-function MatrixTable({ matrix, users, departments, edit }: { matrix: Matrix[]; users: User[]; departments: Department[]; edit: (item: Matrix) => void }) {
-  const rows = [...matrix].sort((a,b) => a.DEPARTMENT_ID.localeCompare(b.DEPARTMENT_ID) || a.APPROVAL_STEP.localeCompare(b.APPROVAL_STEP) || Number(a.SEQUENCE)-Number(b.SEQUENCE));
-  return <div className="table-wrap"><table>
-    <thead><tr><th>Department</th><th>Approval Step</th><th>Sequence</th><th>Approver</th><th>Status</th><th /></tr></thead>
-    <tbody>{rows.map((row) => <tr key={row.MATRIX_ID}>
-      <td data-label="Department">{departments.find((d) => d.DEPARTMENT_ID === row.DEPARTMENT_ID)?.DEPARTMENT_NAME || 'Unknown'}</td>
-      <td data-label="Approval Step"><b>{stepLabel(row.APPROVAL_STEP)}</b></td>
-      <td data-label="Sequence">{row.SEQUENCE}</td>
-      <td data-label="Approver">{users.find((u) => u.USER_ID === row.APPROVER_USER_ID)?.FULL_NAME || 'Unknown user'}</td>
-      <td data-label="Status">{row.ACTIVE ? 'Active' : 'Inactive'}</td>
-      <td><button className="icon-button" onClick={() => edit(row)} aria-label="Edit route"><Pencil/></button></td>
-    </tr>)}</tbody>
-  </table></div>;
+type MaintenanceStatus = {
+  enabled: boolean; lastBackupAt: string; lastArchiveAt: string; backupOverdue: boolean;
+  nextBackup: string; nextArchive: string; visibleFrom: string; visibleYears: number;
+  backups: Array<{ date: string; name: string; url: string; reason: string }>;
+  followUpsScheduled?: boolean; lastFollowUpsAt?: string; remindersEnabled?: boolean; reminderDays?: number; failedEmails?: number;
+};
+
+/** Automatic backups and yearly archive: whether they are on, recent backups, and what runs next. */
+function MaintenancePanel() {
+  const [status, setStatus] = useState<MaintenanceStatus | null>(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let alive = true;
+    api<MaintenanceStatus>('admin.maintenance.status').then((next) => { if (alive) setStatus(next); }).catch((e: Error) => { if (alive) setError(e.message); });
+    return () => { alive = false; };
+  }, []);
+  if (error) return <ErrorNotice message={error} />;
+  if (!status) return <Spinner label="Loading maintenance status" />;
+  const day = (value: string) => (value ? date(value) : '—');
+  return <section className="form-card maintenance-panel">
+    <div className="maintenance-head">
+      <div><h3>Automatic maintenance</h3><p className="muted">Monthly backups are kept forever in Drive (eRFA Backups, one folder per year). Each June the finished RFAs of the year that ended are archived. The app shows {status.visibleFrom} onward; older years stay safe in their archives and backups.</p></div>
+      <span className={`maintenance-state ${status.enabled ? 'on' : 'off'}`}>{status.enabled ? 'On' : 'Off'}</span>
+    </div>
+    {!status.enabled && <div className="notice error" role="alert">Automatic maintenance is not switched on yet. The script owner runs <b>installAutomaticMaintenance</b> once in the Apps Script editor.</div>}
+    {status.enabled && status.backupOverdue && <div className="notice error" role="alert">No backup in the last 35 days. Check the Apps Script owner's access and Drive storage, or run <b>backupNow</b> in the editor.</div>}
+    <div className="maintenance-facts">
+      <div><span>Last backup</span><b>{day(status.lastBackupAt)}</b></div>
+      <div><span>Next backup</span><b>{day(status.nextBackup)}</b></div>
+      <div><span>Next yearly archive</span><b>{day(status.nextArchive)}</b></div>
+      <div><span>Last archive</span><b>{day(status.lastArchiveAt)}</b></div>
+    </div>
+    <div className="maintenance-facts">
+      <div><span>Daily follow-ups (7 AM)</span><b>{status.followUpsScheduled ? 'On' : 'Off'}</b></div>
+      <div><span>Approver reminders</span><b>{status.remindersEnabled === false ? 'Off' : `After ${status.reminderDays ?? 3} days`}</b></div>
+      <div><span>Last follow-up run</span><b>{day(status.lastFollowUpsAt ?? '')}</b></div>
+      <div><span>Failed emails to retry</span><b>{status.failedEmails ?? 0}</b></div>
+    </div>
+    {status.backups.length > 0 && <div className="table-wrap"><table>
+      <thead><tr><th>Backup</th><th>Saved</th><th>Type</th><th aria-label="Open" /></tr></thead>
+      <tbody>{status.backups.map((backup) => <tr key={backup.date + backup.name}>
+        <td data-label="Backup">{backup.name}</td>
+        <td data-label="Saved">{dateTime(backup.date)}</td>
+        <td data-label="Type">{backup.reason === 'Monthly' ? 'Monthly' : `Extra (${backup.reason})`}</td>
+        <td>{backup.url ? <a className="row-link" href={backup.url} target="_blank" rel="noreferrer">Open in Drive</a> : '—'}</td>
+      </tr>)}</tbody>
+    </table></div>}
+  </section>;
+}
+
+type RoleRow = { ROLE_ID: string; TITLE: string; STAGE: 'REVIEWED_AND_NOTED' | 'APPROVED_BY'; CONDITION: 'ALWAYS' | 'ACADEMIC' | 'AT_OR_ABOVE_THRESHOLD' | 'JHS_SHS_OPTIONAL'; EMAIL_ORDER: number; ALL_RFAS_ACCESS: boolean; USER_ID: string; ACTIVE: boolean };
+const STAGE_LABELS: Record<RoleRow['STAGE'], string> = { REVIEWED_AND_NOTED: 'Reviewed & Noted', APPROVED_BY: 'Approved By' };
+const CONDITION_LABELS: Record<RoleRow['CONDITION'], string> = { ALWAYS: 'Every RFA', ACADEMIC: 'Academic departments only', AT_OR_ABOVE_THRESHOLD: 'Amount ≥ threshold', JHS_SHS_OPTIONAL: 'JHS/SHS, when requested' };
+const ORDER_LABELS = ['Emailed first', 'Emailed in the middle', 'Emailed last'];
+
+/**
+ * Approval roles: each row is a role with its title, the person who holds it, its stage, when it
+ * applies, its Approved By email order and whether it opens All RFAs. Add, rename or switch off roles here.
+ */
+function ApprovalSettingsPanel({ data, onSaved, onError }: { data: AdminData; onSaved: () => void; onError: (e: string) => void }) {
+  const initialRoles = (data.roles ?? []) as RoleRow[];
+  const [roles, setRoles] = useState<RoleRow[]>(initialRoles);
+  const [threshold, setThreshold] = useState(data.settings?.presidentThresholdPhp ?? '50000');
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { setRoles((data.roles ?? []) as RoleRow[]); setThreshold(data.settings?.presidentThresholdPhp ?? '50000'); }, [JSON.stringify(data.roles), data.settings?.presidentThresholdPhp]);
+  const options = data.users.filter((u) => u.ACTIVE && u.CAN_APPROVE_RFA).map((u) => ({ value: u.USER_ID, label: `${u.FULL_NAME} - ${u.EMAIL}` }));
+  const update = (index: number, patch: Partial<RoleRow>) => setRoles((cur) => cur.map((role, i) => (i === index ? { ...role, ...patch } : role)));
+  const move = (index: number, delta: number) => setRoles((cur) => {
+    const next = [...cur]; const target = index + delta;
+    if (target < 0 || target >= next.length) return cur;
+    [next[index], next[target]] = [next[target], next[index]];
+    return next;
+  });
+  const addRole = () => setRoles((cur) => [...cur, { ROLE_ID: '', TITLE: '', STAGE: 'APPROVED_BY', CONDITION: 'ALWAYS', EMAIL_ORDER: 1, ALL_RFAS_ACCESS: true, USER_ID: '', ACTIVE: true }]);
+  async function save() {
+    setSaving(true);
+    try {
+      await api('admin.settings.save', { presidentThresholdPhp: threshold });
+      await api('admin.roles.save', { roles });
+      onSaved();
+    } catch (e) { onError(e instanceof Error ? e.message : 'Could not save approval roles.'); }
+    finally { setSaving(false); }
+  }
+  return <section className="form-card" style={{ marginTop: '1rem' }}>
+    <h3>Approval Roles</h3>
+    <p className="muted">Each role keeps its job; change the person, rename it, or add and switch off roles. Routing, the Approved By email order and All RFAs access follow these rows. A department's own matrix entries for Reviewed and Noted By take precedence over the "Every RFA" Reviewed roles.</p>
+    <label className="field role-field" style={{ maxWidth: 320 }}><span>Presidential threshold (PHP)</span><input inputMode="decimal" value={threshold} onChange={(e) => setThreshold(e.target.value)} /><small>Roles set to "Amount ≥ threshold" apply from this amount.</small></label>
+    <div className="roles-list">
+      {roles.map((role, index) => <div key={role.ROLE_ID || `new-${index}`} className={`role-card${role.ACTIVE ? '' : ' inactive'}`}>
+        <div className="role-card-head">
+          <input className="role-title" aria-label="Role title" placeholder="Role title, e.g. Finance Director" value={role.TITLE} onChange={(e) => update(index, { TITLE: e.target.value })} />
+          <div className="role-card-tools">
+            <button type="button" className="icon-button" aria-label="Move up" disabled={index === 0} onClick={() => move(index, -1)}>↑</button>
+            <button type="button" className="icon-button" aria-label="Move down" disabled={index === roles.length - 1} onClick={() => move(index, 1)}>↓</button>
+            <label className="checkbox"><input type="checkbox" checked={role.ACTIVE} onChange={(e) => update(index, { ACTIVE: e.target.checked })} /> Active</label>
+          </div>
+        </div>
+        <div className="role-card-grid">
+          <label className="field"><span>Person</span><SearchableSelect value={role.USER_ID} options={options} placeholder="Search name or email…" emptyLabel="No one assigned" onChange={(v) => update(index, { USER_ID: v })} /></label>
+          <label className="field"><span>Stage</span><select value={role.STAGE} onChange={(e) => update(index, { STAGE: e.target.value as RoleRow['STAGE'], ...(e.target.value === 'APPROVED_BY' && role.CONDITION === 'JHS_SHS_OPTIONAL' ? { CONDITION: 'ALWAYS' as const } : {}) })}>{(Object.keys(STAGE_LABELS) as RoleRow['STAGE'][]).map((stage) => <option key={stage} value={stage}>{STAGE_LABELS[stage]}</option>)}</select></label>
+          <label className="field"><span>Applies to</span><select value={role.CONDITION} onChange={(e) => update(index, { CONDITION: e.target.value as RoleRow['CONDITION'] })}>{(Object.keys(CONDITION_LABELS) as RoleRow['CONDITION'][]).filter((c) => c !== 'JHS_SHS_OPTIONAL' || role.STAGE === 'REVIEWED_AND_NOTED').map((c) => <option key={c} value={c}>{CONDITION_LABELS[c]}</option>)}</select></label>
+          {role.STAGE === 'APPROVED_BY' && <label className="field"><span>Email order</span><select value={role.EMAIL_ORDER} onChange={(e) => update(index, { EMAIL_ORDER: Number(e.target.value) })}>{ORDER_LABELS.map((label, order) => <option key={order} value={order}>{label}</option>)}</select></label>}
+          <label className="checkbox role-access"><input type="checkbox" checked={role.ALL_RFAS_ACCESS} onChange={(e) => update(index, { ALL_RFAS_ACCESS: e.target.checked })} /> Can see All RFAs</label>
+        </div>
+      </div>)}
+    </div>
+    <div className="roles-actions">
+      <button type="button" className="button secondary" onClick={addRole}><Plus size={16} /> Add role</button>
+      <button type="button" className="button primary" disabled={saving} onClick={() => void save()}>{saving ? 'Saving…' : 'Save approval roles'}</button>
+    </div>
+    <p className="muted">One person cannot hold two Approved By roles. Switching a role off keeps its history. Procurement is view-only by department (PPU).</p>
+  </section>;
+}
+
+/**
+ * Department-specific extra approvers. Leftover rows (department or person deleted) and switched-off
+ * rows never route anything, so they are hidden behind a toggle and can be switched off in one click.
+ */
+function MatrixTable({ matrix, users, departments, edit, onChanged, onError }: { matrix: Matrix[]; users: User[]; departments: Department[]; edit: (item: Matrix) => void; onChanged: (message: string) => void; onError: (e: string) => void }) {
+  const [showAll, setShowAll] = useState(false);
+  const [working, setWorking] = useState(false);
+  const departmentName = (id: string) => departments.find((d) => d.DEPARTMENT_ID === id)?.DEPARTMENT_NAME;
+  const userName = (id: string) => users.find((u) => u.USER_ID === id)?.FULL_NAME;
+  const isLeftover = (row: Matrix) => !departmentName(row.DEPARTMENT_ID) || !userName(row.APPROVER_USER_ID);
+  const sorted = [...matrix].sort((a, b) => (departmentName(a.DEPARTMENT_ID) || '~').localeCompare(departmentName(b.DEPARTMENT_ID) || '~') || a.APPROVAL_STEP.localeCompare(b.APPROVAL_STEP) || Number(a.SEQUENCE) - Number(b.SEQUENCE));
+  const workingRows = sorted.filter((row) => row.ACTIVE && !isLeftover(row));
+  const activeLeftovers = sorted.filter((row) => row.ACTIVE && isLeftover(row));
+  const rows = showAll ? sorted : workingRows;
+  async function turnOffLeftovers() {
+    setWorking(true);
+    try {
+      const result = await api<{ turnedOff: number }>('admin.matrix.cleanup');
+      onChanged(`Turned off ${result.turnedOff} leftover row${result.turnedOff === 1 ? '' : 's'}. They are kept for history.`);
+    } catch (e) { onError(e instanceof Error ? e.message : 'Could not turn off leftover rows.'); }
+    finally { setWorking(false); }
+  }
+  return <>
+    {activeLeftovers.length > 0 && <div className="notice matrix-leftovers" role="status">
+      <span>{activeLeftovers.length} leftover row{activeLeftovers.length === 1 ? '' : 's'} point to a deleted department or person and never route anything.</span>
+      <button type="button" className="button secondary" disabled={working} onClick={() => void turnOffLeftovers()}>{working ? 'Turning off…' : 'Turn off leftovers'}</button>
+    </div>}
+    {rows.length === 0
+      ? <div className="empty"><h3>No department-specific approvers</h3><p>That is normal. Department heads (Departments tab) and Approval Roles (below) cover every RFA. Add a route only when one department needs an extra approver.</p></div>
+      : <div className="table-wrap"><table>
+        <thead><tr><th>Department</th><th>Approval Step</th><th>Sequence</th><th>Approver</th><th>Status</th><th /></tr></thead>
+        <tbody>{rows.map((row) => <tr key={row.MATRIX_ID} className={isLeftover(row) || !row.ACTIVE ? 'matrix-off' : ''}>
+          <td data-label="Department">{departmentName(row.DEPARTMENT_ID) || <span className="history-muted">Department deleted</span>}</td>
+          <td data-label="Approval Step"><b>{stepLabel(row.APPROVAL_STEP)}</b></td>
+          <td data-label="Sequence">{row.SEQUENCE}</td>
+          <td data-label="Approver">{userName(row.APPROVER_USER_ID) || <span className="history-muted">Person deleted</span>}</td>
+          <td data-label="Status">{isLeftover(row) ? 'Leftover' : row.ACTIVE ? 'Active' : 'Off'}</td>
+          <td><button className="icon-button" onClick={() => edit(row)} aria-label="Edit route"><Pencil/></button></td>
+        </tr>)}</tbody>
+      </table></div>}
+    {sorted.length > workingRows.length && <p className="muted matrix-toggle"><button type="button" className="link-button" onClick={() => setShowAll((v) => !v)}>{showAll ? 'Show only working rows' : `Show ${sorted.length - workingRows.length} switched-off or leftover row${sorted.length - workingRows.length === 1 ? '' : 's'}`}</button></p>}
+  </>;
 }
 
 function Logs({ data }: { data: AdminData }) {
@@ -359,7 +503,7 @@ function AdminForm({ tab, editing, data, onSaved, onError }: { tab: Tab; editing
     </>}
     {tab === 'matrix' && <>
       <label className="field"><span>Department</span><select required value={String(form.DEPARTMENT_ID ?? '')} onChange={(e) => set('DEPARTMENT_ID',e.target.value)}><option value="">Select department</option>{data.departments.filter((d) => d.ACTIVE).map((d) => <option key={d.DEPARTMENT_ID} value={d.DEPARTMENT_ID}>{d.DEPARTMENT_NAME}</option>)}</select></label>
-      <label className="field"><span>Approval Step</span><select value={String(form.APPROVAL_STEP ?? 'REVIEWED_AND_NOTED')} onChange={(e) => set('APPROVAL_STEP',e.target.value)}><option value="REVIEWED_AND_NOTED">Reviewed and Noted By (mandatory)</option><option value="APPROVED_BY">Approved By</option><option value="RECOMMENDING_APPROVAL">Recommending Approval</option><option value="REVIEWED_BY">Reviewed By (legacy V2)</option><option value="NOTED_BY">Noted By (legacy V2)</option><option value="INVOLVED_DEPARTMENT_HEAD">Involved Department Head (legacy V2)</option></select></label>
+      <label className="field"><span>Approval Step</span><select value={String(form.APPROVAL_STEP ?? 'REVIEWED_AND_NOTED')} onChange={(e) => set('APPROVAL_STEP',e.target.value)}><option value="REVIEWED_AND_NOTED">Reviewed and Noted By</option><option value="APPROVED_BY">Approved By</option><option value="RECOMMENDING_APPROVAL">Recommending Approval</option><option value="REVIEWED_BY">Reviewed By (legacy V2)</option><option value="NOTED_BY">Noted By (legacy V2)</option><option value="INVOLVED_DEPARTMENT_HEAD">Involved Department Head (legacy V2)</option></select></label>
       <label className="field"><span>Sequence</span><input required min="1" type="number" value={Number(form.SEQUENCE ?? 1)} onChange={(e) => set('SEQUENCE',Number(e.target.value))}/></label>
       <label className="field"><span>Approver</span><select required value={String(form.APPROVER_USER_ID ?? '')} onChange={(e) => set('APPROVER_USER_ID',e.target.value)}><option value="">Select approver</option>{data.users.filter((u) => u.ACTIVE && u.CAN_APPROVE_RFA).map((u) => <option key={u.USER_ID} value={u.USER_ID}>{u.FULL_NAME} - {u.EMAIL}</option>)}</select></label>
       <Checkbox label="Active" checked={Boolean(form.ACTIVE ?? true)} set={(v) => set('ACTIVE',v)}/>
@@ -372,7 +516,7 @@ function Checkbox({ label, checked, set }: { label: string; checked: boolean; se
   return <label className="checkbox"><input type="checkbox" checked={checked} onChange={(e) => set(e.target.checked)}/><span>{label}</span></label>;
 }
 
-function SearchableSelect({ value, options, placeholder, onChange }: { value: string; options: Array<{ value: string; label: string }>; placeholder: string; onChange: (v: string) => void }) {
+function SearchableSelect({ value, options, placeholder, onChange, emptyLabel }: { value: string; options: Array<{ value: string; label: string }>; placeholder: string; onChange: (v: string) => void; emptyLabel?: string }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [highlight, setHighlight] = useState(0);
@@ -396,7 +540,7 @@ function SearchableSelect({ value, options, placeholder, onChange }: { value: st
       }}
     />
     {open && <ul className="searchable-list">
-      <li className={value === '' ? 'active' : ''} onMouseDown={(e) => { e.preventDefault(); onChange(''); setOpen(false); setQuery(''); }}>Not configured (name lookup)</li>
+      {emptyLabel && <li className={value === '' ? 'active' : ''} onMouseDown={(e) => { e.preventDefault(); onChange(''); setOpen(false); setQuery(''); }}>{emptyLabel}</li>}
       {shown.map((o, i) => <li key={o.value} className={o.value === value || i === highlight ? 'active' : ''} onMouseDown={(e) => { e.preventDefault(); onChange(o.value); setOpen(false); setQuery(''); }}>{o.label}</li>)}
       {shown.length === 0 && <li style={{ color: 'var(--muted)' }}>No matches</li>}
     </ul>}

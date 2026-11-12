@@ -1,10 +1,11 @@
 import { ArrowLeft, Check, Download, Edit3, FileText, Printer, RotateCcw, Send, XCircle } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
+import { useAuth } from '../auth';
 import { Dialog, ErrorNotice, Spinner, StatusBadge, SuccessNotice } from '../components';
-import { date, dateTime, displayName, expenseClassificationLabel, money, stepLabel } from '../format';
-import type { Approval, ApprovalStep, Attachment, Rfa, RfaDetail } from '../types';
+import { date, dateTime, displayName, expenseClassificationLabel, money, rfaNumberLabel, schoolYearLabel, stepLabel } from '../format';
+import type { Approval, ApprovalStep, Attachment, Audit, Rfa, RfaDetail } from '../types';
 
 const legacySteps: ApprovalStep[] = ['PREPARED_BY', 'RECOMMENDING_APPROVAL', 'REVIEWED_AND_NOTED', 'APPROVED_BY'];
 const legacyAssignmentSteps: ApprovalStep[] = ['PREPARED_BY', 'RECOMMENDING_APPROVAL', 'REVIEWED_BY', 'NOTED_BY', 'APPROVED_BY'];
@@ -14,6 +15,8 @@ const officialSteps: ApprovalStep[] = ['PREPARED_BY', 'RECOMMENDING_APPROVAL', '
 export function RfaDetailPage() {
   const { id = '' } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const schoolYear = Number(searchParams.get('sy') || 0);
   const [detail, setDetail] = useState<RfaDetail | null>(null);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -24,11 +27,11 @@ export function RfaDetailPage() {
 
   const load = useCallback(() => {
     setLoading(true);
-    void api<RfaDetail>('rfa.detail', { rfaId: id })
+    void api<RfaDetail>('rfa.detail', schoolYear ? { rfaId: id, schoolYear } : { rfaId: id })
       .then(setDetail)
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [id]);
+  }, [id, schoolYear]);
 
   useEffect(load, [load]);
 
@@ -84,9 +87,10 @@ export function RfaDetailPage() {
   return <>
     <div className="screen-only">
       <Link className="back-link" to="/rfas"><ArrowLeft size={16} /> Back to RFAs</Link>
+      {detail.archived && <div className="notice archived-notice" role="status">Archived record · {detail.archived.label}. This RFA is kept for reference and can no longer be changed.</div>}
       <header className="detail-header">
         <div>
-          <span className="eyebrow orange">{rfa.RFA_NUMBER}</span>
+          <span className="eyebrow orange">{rfaNumberLabel(rfa.RFA_NUMBER)}</span>
           <h1>{rfa.REQUEST_TITLE || 'Untitled draft'}</h1>
           <div className="detail-meta">
             <StatusBadge status={rfa.STATUS} />
@@ -119,7 +123,7 @@ export function RfaDetailPage() {
         <img src={`${import.meta.env.BASE_URL}school-logo.svg`} alt="FEU Bataan Campus" />
         <div>
           <b>REQUEST FOR APPROVAL (RFA) FORM</b>
-          <span>{rfa.RFA_NUMBER}</span>
+          <span>{rfaNumberLabel(rfa.RFA_NUMBER)}</span>
         </div>
       </header>
 
@@ -135,7 +139,7 @@ export function RfaDetailPage() {
 
       <DocumentSection title="Expense Information">
         <section className="request-grid two">
-          <Fact label="Fiscal Year" value={financial?.fiscalYear || rfa.FISCAL_YEAR || '—'} />
+          <Fact label="School Year" value={schoolYearLabel(financial?.fiscalYear || rfa.FISCAL_YEAR || '')} />
           <Fact label="Expense Classification" value={expenseClassificationLabel(rfa.EXPENSE_CLASSIFICATION || financial?.expenseClassification)} />
           <Fact label="Requested Amount" value={money(financial?.requestedAmount ?? (rfa.REQUESTED_AMOUNT ? rfa.REQUESTED_AMOUNT / 100 : rfa.BUDGET_ALLOCATION))} />
           <Fact label="Purchase Request" value={rfa.PURCHASE_REQUEST || financial?.purchaseRequest ? 'Yes' : 'No'} />
@@ -178,16 +182,16 @@ export function RfaDetailPage() {
       </section>
 
       <DocumentSection title="Approval History">
-        <HistoryTable approvals={approvals} status={rfa.STATUS} waiting={approvedByWaitingMap} />
+        <HistoryTable approvals={approvals} status={rfa.STATUS} waiting={approvedByWaitingMap} rfaId={rfa.RFA_ID} />
       </DocumentSection>
 
       <section className="audit-section screen-only">
         <h2>Audit History</h2>
-        {audit.length ? <ol>{[...audit].reverse().map((entry) => <li key={entry.LOG_ID}>
+        {visibleAudit(audit).length ? <ol>{[...visibleAudit(audit)].reverse().map((entry) => <li key={entry.LOG_ID}>
           <span>{dateTime(entry.TIMESTAMP)}</span>
           <div>
-            <b>{entry.ACTION.replaceAll('_',' ')}</b>
-            <p>{entry.ACTOR_NAME}{entry.REMARKS ? ` — ${entry.REMARKS}` : ''}</p>
+            <b>{auditLabel(entry.ACTION)}</b>
+            <p>{entry.ACTOR_NAME}{auditRemarks(entry) ? ` — ${auditRemarks(entry)}` : ''}</p>
           </div>
         </li>)}</ol> : <p>No audit entries.</p>}
       </section>
@@ -251,6 +255,27 @@ export function RfaDetailPage() {
       </div></div>
     </Dialog>}
   </>;
+}
+
+// Plain-language history on the RFA page. Purely technical entries are kept in
+// Administration > Logs but not shown here.
+const HIDDEN_AUDIT = new Set(['OPTIONAL_APPROVERS_SELECTED', 'OPTIONAL_APPROVERS_RESOLVED', 'FINANCIAL_RFA_SUBMITTED', 'APPROVAL_REQUESTED', 'NOTED_BY_SELECTION', 'ACCESS_DENIED']);
+const AUDIT_LABELS: Record<string, string> = {
+  RFA_CREATED: 'Draft created', RFA_UPDATED: 'Draft updated', RFA_SUBMITTED: 'Submitted', RESUBMITTED: 'Resubmitted',
+  APPROVED: 'Approved', RETURNED: 'Returned for revision', DISAPPROVED: 'Disapproved', FINAL_APPROVED: 'Fully approved',
+  EMAIL_SENT: 'Email sent', EMAIL_FAILED: 'Email could not be sent', APPROVER_REASSIGNED: 'Approval handed over',
+  ATTACHMENT_UPLOADED: 'Attachment added', IMPLEMENTATION: 'Implementation started', CLOSED: 'Closed', CANCELLED: 'Cancelled',
+  ACTUAL_EXPENSE_RECORDED: 'Actual expense recorded', WORKFLOW_EXCEPTION: 'Needs administrator attention', APPROVER_SKIPPED: 'Approver skipped', STAGE_SKIPPED: 'Step skipped'
+};
+const EMAIL_KINDS: Record<string, string> = {
+  APPROVAL_REQUIRED: 'approval request', APPROVAL_REMINDER: 'reminder', RFA_SUBMITTED: 'submission confirmation', RFA_RESUBMITTED: 'resubmission confirmation',
+  RFA_RETURNED: 'returned notice', RFA_DISAPPROVED: 'disapproval notice', RFA_APPROVED: 'approval notice', RFA_CLOSED: 'closing notice', WORKFLOW_EXCEPTION: 'administrator alert'
+};
+function visibleAudit(entries: Audit[]): Audit[] { return entries.filter((entry) => !HIDDEN_AUDIT.has(entry.ACTION)); }
+function auditLabel(action: string): string { return AUDIT_LABELS[action] ?? action.replaceAll('_', ' ').toLowerCase().replace(/^./, (c) => c.toUpperCase()); }
+function auditRemarks(entry: Audit): string {
+  if (entry.ACTION === 'EMAIL_SENT' || entry.ACTION === 'EMAIL_FAILED') return EMAIL_KINDS[entry.REMARKS] ?? entry.REMARKS;
+  return entry.REMARKS;
 }
 
 function Fact({ label, value, wide = false }: { label: string; value: string; wide?: boolean }) {
@@ -331,7 +356,9 @@ function sameApprover(a: Approval, b: Approval): boolean {
   return Boolean(a.APPROVER_EMAIL) && a.APPROVER_EMAIL.toLowerCase() === (b.APPROVER_EMAIL || '').toLowerCase();
 }
 
-function HistoryTable({ approvals, status, waiting = new Map<string, string>() }: { approvals: Approval[]; status: string; waiting?: Map<string, string> }) {
+function HistoryTable({ approvals, status, waiting = new Map<string, string>(), rfaId = '' }: { approvals: Approval[]; status: string; waiting?: Map<string, string>; rfaId?: string }) {
+  const { user } = useAuth();
+  const canHandOver = Boolean(user?.IS_ADMIN) && Boolean(rfaId);
   const awaiting = status === 'SUBMITTED' || status.startsWith('PENDING_');
   // An assignment row (no action yet) is hidden once that approver has acted on the same step.
   const rows = approvals
@@ -352,9 +379,9 @@ function HistoryTable({ approvals, status, waiting = new Map<string, string>() }
         const label = acted ? actionLabel(approval.STEP, approval.ACTION) : waitingLabel ?? (awaiting ? 'Pending' : 'Not reached');
         return <tr key={approval.APPROVAL_ID}>
           <td data-label="Step">{stepLabel(approval.STEP)}</td>
-          <td data-label="Approver">{approval.APPROVER_NAME ? displayName(approval.APPROVER_NAME) : 'System'}</td>
+          <td data-label="Approver">{approval.APPROVER_NAME ? displayName(approval.APPROVER_NAME) : 'System'}{canHandOver && !acted && awaiting && approval.APPROVER_USER_ID && <Link className="handover-link" to={`/admin?tab=users&handover=${encodeURIComponent(approval.APPROVER_USER_ID)}&rfa=${encodeURIComponent(rfaId)}`}>Hand over</Link>}</td>
           <td data-label="Action"><span className={`history-action history-action-${sent ? 'sent' : acted ? approval.ACTION.toLowerCase() : waitingLabel ? 'idle' : awaiting ? 'pending' : 'idle'}`}>{label}</span></td>
-          <td data-label="Remarks">{approval.REMARKS || '—'}</td>
+          <td data-label="Remarks">{String(approval.REMARKS || '').replace(/ \(#[^)]+\)$/, '') || '—'}</td>
           <td data-label={acted ? 'Date and Time' : 'Assigned'}>{acted ? dateTime(approval.TIMESTAMP) : <span className="history-muted">Assigned {dateTime(approval.TIMESTAMP)}</span>}</td>
         </tr>;
       })}</tbody>

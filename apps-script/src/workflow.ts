@@ -2,7 +2,9 @@ import { ALLOWED_ATTACHMENT_TYPES, APPROVAL_SECTIONS, ASSIGNMENT_WORKFLOW_MARKER
 import { audit } from './audit';
 import { commitApprovedFinancialRfa, financialDetail, financialRfaFields, recordActualExpense } from './budget';
 import { formatRfaNumber, isJhsOrShsDepartment, nextAssignedSection, nextAssignedStageAfterAction, normalizeEmail, orderedMatrix, parsePresidentThresholdCents, selectNextApprover, toBoolean, validateExpenseClassification, validateRfaInput } from './core';
+import { archivedRows, findArchivedAttachment, findArchivedRfa, schoolYearLabel } from './archive';
 import { notify } from './notifications';
+import { activeRoles, emailOrderFor, hasAllRfasRole, isReplacedOfficial, resolveRole, type ApprovalRole, type RoleStage } from './roles';
 import { all, clearPendingRfaAssignments, findBy, getAssignmentsBySection, getSetting, insert, newId, nowIso, saveRfaSectionAssignments, setSetting, updateBy } from './store';
 import type { ApprovalSection, DepartmentHeadRecord, DepartmentRecord, EligibleApprover, MatrixRecord, RfaRecord, RfaSectionAssignments, SessionUser, SheetRecord, UserRecord } from './types';
 
@@ -57,14 +59,16 @@ function getApprovedAssignments(rfa: RfaRecord, section: ApprovalSection): Sheet
  * then the President last. Only the email timing follows this order; every assigned
  * official can still open and act on the RFA as soon as the stage starts.
  */
+/** Marker kept on a handed-over assignment so the stand-in keeps the original person's place. */
+const STAND_IN = /\(#([^)]+)\)$/;
+export function standInNote(fromName: string, fromId: string): string { return `Stand-in for ${fromName} (#${fromId})`; }
+
 function approvedByEmailTier(row: SheetRecord): number {
-  const id = String(row.APPROVER_USER_ID);
-  const financeId = String(getSetting('APPROVED_MANDATORY_USER_IDS') || '').split(',')[0].trim();
-  if (financeId && id === financeId) return 0;
-  const presidentId = String(getSetting('PRESIDENT_USER_ID') || '').trim();
-  const presidentEmail = normalizeEmail(String(getSetting('PRESIDENT_EMAIL') || ''));
-  if ((presidentId && id === presidentId) || (presidentEmail && normalizeEmail(row.APPROVER_EMAIL) === presidentEmail)) return 2;
-  return 1;
+  // A stand-in takes the email order of the person they replaced (e.g. still "first" for the Finance Official).
+  const original = String(row.REMARKS || '').match(STAND_IN)?.[1];
+  const source = original ? findBy<UserRecord>('USERS', 'USER_ID', original) : undefined;
+  if (original) return emailOrderFor({ id: original, name: String(source?.FULL_NAME || ''), email: String(source?.EMAIL || '') });
+  return emailOrderFor({ id: String(row.APPROVER_USER_ID), name: String(row.APPROVER_NAME || ''), email: String(row.APPROVER_EMAIL || '') });
 }
 
 /** The Approved By assignees still awaiting action in the earliest email tier that is not yet complete. */
@@ -127,20 +131,15 @@ const APPROVED_STATUSES = ['APPROVED', 'IMPLEMENTATION', 'CLOSED'];
 /**
  * Who may open the institution-wide "All RFAs" register:
  *  - 'all'      administrators, both VPs, the President, the Reviewed and Noted
- *               official and the Approved By officials
+ *               official and the Approved By officials (see OFFICIAL_ROLES)
  *  - 'approved' Procurement: approved, in-implementation and closed RFAs only
  *  - 'none'     everyone else (they see only their own RFAs and their approval queue)
  * Officials are recognised only by the user IDs and emails configured in Settings.
  */
 export function allRfasScope(user: SessionUser): 'all' | 'approved' | 'none' {
   if (toBoolean(user.IS_ADMIN)) return 'all';
-  const email = normalizeEmail(user.EMAIL);
-  const ids = new Set<string>();
-  const addIds = (key: string) => String(getSetting(key) || '').split(',').map((v) => v.trim()).filter(Boolean).forEach((v) => ids.add(v));
-  ['VP_ACADEMIC_USER_ID', 'PRESIDENT_USER_ID', 'REVIEWED_MANDATORY_USER_ID', 'APPROVED_MANDATORY_USER_IDS'].forEach(addIds);
-  if (ids.has(user.USER_ID)) return 'all';
-  const emails = [getSetting('VP_ADMIN_FINANCE_EMAIL'), getSetting('PRESIDENT_EMAIL')].map((v) => normalizeEmail(String(v || ''))).filter(Boolean);
-  if (email && emails.includes(email)) return 'all';
+  const person = { id: user.USER_ID, name: String(user.FULL_NAME || ''), email: user.EMAIL };
+  if (hasAllRfasRole(person)) return 'all';
   const procurementId = String(getSetting('PROCUREMENT_USER_ID') || '').trim();
   if ((procurementId && procurementId === user.USER_ID) || isProcurementUser(user)) return 'approved';
   return 'none';
@@ -174,6 +173,45 @@ function nextNumber(): string {
   setSetting('LAST_RFA_YEAR', String(year), 'Internal numbering state');
   setSetting('LAST_RFA_SEQUENCE', String(sequence), 'Internal numbering state');
   return formatRfaNumber(year, sequence);
+}
+
+/** Drive folder name for a draft's attachments until it receives its RFA number. */
+function draftFolderName(rfa: RfaRecord): string { return `DRAFT-${rfa.RFA_ID}`; }
+
+/**
+ * RFA numbers are given when an RFA is first submitted, so unsubmitted drafts never use up
+ * a number and numbers follow the order RFAs were actually sent. Called only after the
+ * submission has passed validation; a returned RFA keeps its number when resubmitted.
+ */
+function assignNumberOnSubmit(rfa: RfaRecord): void {
+  if (rfa.RFA_NUMBER) return;
+  rfa.RFA_NUMBER = nextNumber();
+  updateBy('RFA', 'RFA_ID', rfa.RFA_ID, { RFA_NUMBER: rfa.RFA_NUMBER });
+  moveDraftAttachments(rfa);
+}
+
+/** Rename the draft's attachment folder to the new RFA number, in that number's year folder. */
+function moveDraftAttachments(rfa: RfaRecord): void {
+  try {
+    const rootId = getSetting('ATTACHMENT_ROOT_FOLDER_ID');
+    if (!rootId) return;
+    const root = DriveApp.getFolderById(rootId);
+    const years = root.getFolders();
+    while (years.hasNext()) {
+      const yearFolder = years.next();
+      const drafts = yearFolder.getFoldersByName(draftFolderName(rfa));
+      if (!drafts.hasNext()) continue;
+      const folder = drafts.next();
+      folder.setName(rfa.RFA_NUMBER);
+      const targetYear = rfa.RFA_NUMBER.split('-')[1];
+      if (targetYear && yearFolder.getName() !== targetYear) {
+        const existing = root.getFoldersByName(targetYear);
+        folder.moveTo(existing.hasNext() ? existing.next() : root.createFolder(targetYear));
+      }
+      folderCache.delete(`rfa:${draftFolderName(rfa)}`);
+      return;
+    }
+  } catch { /* Attachments open from their own file IDs; the folder name is only for tidiness. */ }
 }
 
 function appendApproval(rfa: RfaRecord, step: string, actor: Pick<UserRecord, 'USER_ID' | 'FULL_NAME' | 'EMAIL'>, action: string, remarks = ''): void {
@@ -371,25 +409,6 @@ function getThresholdCents(): number {
   try { return parsePresidentThresholdCents(getSetting('PRESIDENT_THRESHOLD_PHP') || '50000'); } catch { return 5_000_000; }
 }
 
-/**
- * Locates a fixed official only from Settings: the user ID in `settingKey`
- * (first entry when comma-separated) or, failing that, the email in `emailKey`.
- * There are no built-in names or emails; an unconfigured official resolves to undefined.
- */
-function findOfficialUser(settingKey: string, usersById: Map<string, UserRecord>, requesterEmail: string, requesterUserId: string, emailKey?: string): UserRecord | undefined {
-  const settingId = String(getSetting(settingKey) || '').split(',')[0].trim();
-  if (settingId) {
-    const byId = usersById.get(settingId);
-    if (byId) return isValidApprover(byId, requesterEmail, requesterUserId) ? byId : undefined;
-  }
-  const emailToTry = emailKey ? normalizeEmail(String(getSetting(emailKey) || '')) : '';
-  if (emailToTry) {
-    for (const candidate of usersById.values()) {
-      if (normalizeEmail(candidate.EMAIL) === emailToTry && isValidApprover(candidate, requesterEmail, requesterUserId)) return candidate;
-    }
-  }
-  return undefined;
-}
 
 function addDistinct(list: EligibleApprover[], candidates: EligibleApprover[]): void {
   for (const c of candidates) {
@@ -518,6 +537,7 @@ function resolveOfficialAssignments(
     for (const row of rows) {
       const c = usersById.get(String(row.APPROVER_USER_ID));
       if (!c || !isValidApprover(c, requester, requesterUserId)) continue;
+      if (isReplacedOfficial(c)) continue; // role now held by someone else (set in Approval settings)
       if (seen.has(c.USER_ID)) continue;
       seen.add(c.USER_ID);
       out.push(toEligible(c, deptNameMap));
@@ -535,17 +555,29 @@ function resolveOfficialAssignments(
   if (strict && !recommending.length) businessError('No Department Head is configured for the requesting department. An administrator must set department heads before submission.', 'CONFIGURATION_REQUIRED');
   assignments.RECOMMENDING_APPROVAL = recommending;
 
+  // Roles from Administration -> Approval roles. Each applicable role must have a person who can approve.
+  const canApprove = (u: UserRecord) => isValidApprover(u, requester, requesterUserId);
+  const roleHolders = (stage: RoleStage, applies: (role: ApprovalRole) => boolean, why: string): EligibleApprover[] => {
+    const holders: EligibleApprover[] = [];
+    for (const role of activeRoles(stage).filter(applies)) {
+      const holder = resolveRole(role, usersById, canApprove);
+      if (holder) addDistinct(holders, [toEligible(holder, deptNameMap)]);
+      else if (strict) businessError(`The approval role "${role.TITLE}" has no person assigned${why}. An administrator must assign it in Approval roles before submission.`, 'CONFIGURATION_REQUIRED');
+    }
+    return holders;
+  };
+  const academic = isAcademicDepartment(requestingDept);
+  const atOrAboveThreshold = Number(requestedAmountCents) >= getThresholdCents();
+  const conditional = (role: ApprovalRole) => (role.CONDITION === 'ACADEMIC' && academic) || (role.CONDITION === 'AT_OR_ABOVE_THRESHOLD' && atOrAboveThreshold);
+
   // --- Stage 2: Reviewed and Noted By ---
   const reviewed: EligibleApprover[] = [];
-  // Mandatory: matrix REVIEWED_AND_NOTED takes precedence, then the setting
+  // A department's own matrix entries take precedence over the always-on Reviewed roles.
   let mandatoryReviewed = resolveMatrix('REVIEWED_AND_NOTED');
-  if (!mandatoryReviewed.length) {
-    const official = findOfficialUser('REVIEWED_MANDATORY_USER_ID', usersById, requester, requesterUserId);
-    if (official) mandatoryReviewed = [toEligible(official, deptNameMap)];
-  }
-  // If matrix contains REVIEWED_BY/NOTED_BY from V2-era config for this dept, do not mix; official stage only uses REVIEWED_AND_NOTED.
+  if (!mandatoryReviewed.length) mandatoryReviewed = roleHolders('REVIEWED_AND_NOTED', (role) => role.CONDITION === 'ALWAYS', '');
   addDistinct(reviewed, mandatoryReviewed);
-  if (strict && !mandatoryReviewed.length) businessError('Reviewed and Noted By mandatory approver is not configured. An administrator must configure it before submission.', 'CONFIGURATION_REQUIRED');
+  if (strict && !mandatoryReviewed.length) businessError('Reviewed and Noted By has no approver. An administrator must assign it in Approval roles before submission.', 'CONFIGURATION_REQUIRED');
+  addDistinct(reviewed, roleHolders('REVIEWED_AND_NOTED', conditional, ' for this request'));
 
   // Optional: Other Department Heads (all heads per involved dept — all must approve)
   const involvedNames: string[] = [];
@@ -562,12 +594,10 @@ function resolveOfficialAssignments(
     }
   }
 
-  // Optional: Principal (JHS/SHS only)
+  // Optional: JHS/SHS roles (e.g. the Principal), only when the request asks for them
   if (selections.includePrincipal) {
     if (!isJhsOrShsDepartment(requestingDept)) businessError('The JHS/SHS Principal is only available for Junior High School or Senior High School departments.', 'FORBIDDEN');
-    const principal = findOfficialUser('PRINCIPAL_USER_ID', usersById, requester, requesterUserId);
-    if (strict && !principal) businessError('JHS/SHS Principal is not configured.', 'CONFIGURATION_REQUIRED');
-    if (principal) addDistinct(reviewed, [toEligible(principal, deptNameMap)]);
+    addDistinct(reviewed, roleHolders('REVIEWED_AND_NOTED', (role) => role.CONDITION === 'JHS_SHS_OPTIONAL', ' for this JHS/SHS request'));
   }
   // Procurement Clerk removed from the workflow — never assigned.
   assignments.REVIEWED_AND_NOTED = reviewed;
@@ -575,33 +605,11 @@ function resolveOfficialAssignments(
   // --- Stage 3: Approved By ---
   const approved: EligibleApprover[] = [];
   const mandatoryApproved = resolveMatrix('APPROVED_BY');
-  // Supplement with the mandatory user IDs from Settings (Finance official, VP for Admin and Finance)
-  const settingMandatory = String(getSetting('APPROVED_MANDATORY_USER_IDS') || '').split(',').map((s) => s.trim()).filter(Boolean);
-  for (const id of settingMandatory) {
-    const c = usersById.get(id);
-    if (c && isValidApprover(c, requester, requesterUserId) && !mandatoryApproved.some((e) => e.USER_ID === c.USER_ID)) mandatoryApproved.push(toEligible(c, deptNameMap));
-  }
-  // VP for Admin and Finance by configured email, when not already listed by ID.
-  const vpAdminFinanceEmail = normalizeEmail(String(getSetting('VP_ADMIN_FINANCE_EMAIL') || ''));
-  if (vpAdminFinanceEmail && !mandatoryApproved.some((e) => normalizeEmail(e.EMAIL) === vpAdminFinanceEmail)) {
-    for (const candidate of usersById.values()) {
-      if (normalizeEmail(candidate.EMAIL) === vpAdminFinanceEmail && isValidApprover(candidate, requester, requesterUserId)) { addDistinct(mandatoryApproved, [toEligible(candidate, deptNameMap)]); break; }
-    }
-  }
+  addDistinct(mandatoryApproved, roleHolders('APPROVED_BY', (role) => role.CONDITION === 'ALWAYS', ''));
   addDistinct(approved, mandatoryApproved);
-  if (strict && !mandatoryApproved.length) businessError('Approved By mandatory approvers are not configured. An administrator must configure them before submission.', 'CONFIGURATION_REQUIRED');
-
-  if (isAcademicDepartment(requestingDept)) {
-    const vp = findOfficialUser('VP_ACADEMIC_USER_ID', usersById, requester, requesterUserId);
-    if (strict && !vp) businessError('VP for Academic Affairs is not configured for this academic department RFA.', 'CONFIGURATION_REQUIRED');
-    if (vp) addDistinct(approved, [toEligible(vp, deptNameMap)]);
-  }
-  const threshold = getThresholdCents();
-  if (Number(requestedAmountCents) >= threshold) {
-    const president = findOfficialUser('PRESIDENT_USER_ID', usersById, requester, requesterUserId, 'PRESIDENT_EMAIL');
-    if (strict && !president) businessError('President is not configured for this above-threshold RFA.', 'CONFIGURATION_REQUIRED');
-    if (president) addDistinct(approved, [toEligible(president, deptNameMap)]);
-  }
+  if (strict && !mandatoryApproved.length) businessError('Approved By has no approvers. An administrator must assign them in Approval roles before submission.', 'CONFIGURATION_REQUIRED');
+  // Conditional roles: academic departments (e.g. VP for Academic Affairs), at or above the threshold (e.g. President)
+  addDistinct(approved, roleHolders('APPROVED_BY', conditional, ' for this request'));
   assignments.APPROVED_BY = approved;
 
   return { assignments, involvedDepartmentNames: involvedNames, alternateName };
@@ -705,7 +713,7 @@ export function fixedRoutePreview(user: SessionUser): Record<string, unknown> {
     isAcademic: isAcademicDepartment(department as DepartmentRecord),
     isJhsOrShs: isJhsOrShsDepartment(department as DepartmentRecord),
     presidentThresholdPhp: getThresholdCents() / 100,
-    principalName: (() => { const p = findOfficialUser('PRINCIPAL_USER_ID', usersById, user.EMAIL, user.USER_ID); return p ? p.FULL_NAME : ''; })(),
+    principalName: activeRoles('REVIEWED_AND_NOTED').filter((role) => role.CONDITION === 'JHS_SHS_OPTIONAL').map((role) => resolveRole(role, usersById, (u) => isValidApprover(u, user.EMAIL, user.USER_ID))?.FULL_NAME || '').filter(Boolean).join(', '),
     alternateCandidates
   };
 }
@@ -729,14 +737,14 @@ export function createRfa(user: SessionUser, payload: Record<string, unknown>): 
   }
   const expenseClassification = validateExpenseClassification(payload.expenseClassification);
   const selections = parseOfficialSelections(payload, department.DEPARTMENT_ID);
-  const financial = financialRfaFields(user, { ...payload, isBudgetRequest: true, expenseClassification, involvedDepartmentId: selections.involvedDepartmentIds[0] || '', involvedDepartmentIds: selections.involvedDepartmentIds.join(',') }, false) as Pick<RfaRecord, 'IS_BUDGET_REQUEST' | 'EXPENSE_CATEGORY_ID' | 'REQUESTED_AMOUNT' | 'APPROVED_AMOUNT' | 'ACTUAL_AMOUNT' | 'FISCAL_YEAR' | 'ACTUAL_EXPENSE_RECORDED_AT' | 'EXPENSE_CLASSIFICATION' | 'INVOLVED_DEPARTMENT_ID' | 'INVOLVED_DEPARTMENT_NAME' | 'PURCHASE_REQUEST' | 'RECOMMENDING_ALTERNATE_USER_ID' | 'RECOMMENDING_ALTERNATE_NAME' | 'INCLUDE_PRINCIPAL' | 'INCLUDE_PROCUREMENT' | 'INVOLVED_DEPARTMENT_IDS'>;
+  const financial = financialRfaFields(user, { ...payload, dateFiled: new Date(), isBudgetRequest: true, expenseClassification, involvedDepartmentId: selections.involvedDepartmentIds[0] || '', involvedDepartmentIds: selections.involvedDepartmentIds.join(',') }, false) as Pick<RfaRecord, 'IS_BUDGET_REQUEST' | 'EXPENSE_CATEGORY_ID' | 'REQUESTED_AMOUNT' | 'APPROVED_AMOUNT' | 'ACTUAL_AMOUNT' | 'FISCAL_YEAR' | 'ACTUAL_EXPENSE_RECORDED_AT' | 'EXPENSE_CLASSIFICATION' | 'INVOLVED_DEPARTMENT_ID' | 'INVOLVED_DEPARTMENT_NAME' | 'PURCHASE_REQUEST' | 'RECOMMENDING_ALTERNATE_USER_ID' | 'RECOMMENDING_ALTERNATE_NAME' | 'INCLUDE_PRINCIPAL' | 'INCLUDE_PROCUREMENT' | 'INVOLVED_DEPARTMENT_IDS'>;
   // Validate applicabilities softly at draft (strict at submit)
   if (selections.includePrincipal && !isJhsOrShsDepartment(department)) businessError('The JHS/SHS Principal is only available for Junior High School or Senior High School departments.', 'FORBIDDEN');
   const resolved = resolveOfficialAssignments(department.DEPARTMENT_ID, selections, Number(financial.REQUESTED_AMOUNT), user.EMAIL, user.USER_ID, false);
   const timestamp = nowIso();
   const involvedNames = resolved.involvedDepartmentNames.join(', ');
   const record: RfaRecord = {
-    RFA_ID: newId('rfa'), RFA_NUMBER: nextNumber(), DATE_FILED: timestamp.slice(0, 10),
+    RFA_ID: newId('rfa'), RFA_NUMBER: '', DATE_FILED: timestamp.slice(0, 10),
     DEPARTMENT_ID: department.DEPARTMENT_ID, DEPARTMENT_NAME: department.DEPARTMENT_NAME,
     REQUESTED_BY: user.FULL_NAME, REQUESTER_EMAIL: normalizeEmail(user.EMAIL), POSITION: user.POSITION,
     REQUEST_TITLE: String(clean.requestTitle), PURPOSE: String(clean.purpose), BUDGET_ALLOCATION: Number(clean.budgetAllocation),
@@ -783,7 +791,7 @@ export function updateRfa(user: SessionUser, payload: Record<string, unknown>): 
       const dept = findBy<DepartmentRecord>('DEPARTMENTS', 'DEPARTMENT_ID', rfa.DEPARTMENT_ID);
       if (!isJhsOrShsDepartment(dept)) businessError('The JHS/SHS Principal is only available for Junior High School or Senior High School departments.', 'FORBIDDEN');
     }
-    const financial = financialRfaFields(user, { ...payload, isBudgetRequest: true, expenseClassification, involvedDepartmentId: selections.involvedDepartmentIds[0] || '', involvedDepartmentIds: selections.involvedDepartmentIds.join(',') }, false);
+    const financial = financialRfaFields(user, { ...payload, dateFiled: rfa.DATE_FILED || new Date(), isBudgetRequest: true, expenseClassification, involvedDepartmentId: selections.involvedDepartmentIds[0] || '', involvedDepartmentIds: selections.involvedDepartmentIds.join(',') }, false);
     const resolved = resolveOfficialAssignments(rfa.DEPARTMENT_ID, selections, Number(financial.REQUESTED_AMOUNT), rfa.REQUESTER_EMAIL, user.USER_ID, false);
     const updates = {
       REQUEST_TITLE: clean.requestTitle, PURPOSE: clean.purpose, BUDGET_ALLOCATION: clean.budgetAllocation,
@@ -865,6 +873,8 @@ export function updateRfa(user: SessionUser, payload: Record<string, unknown>): 
 export function submitRfa(user: SessionUser, rfaId: string, resubmit = false): RfaRecord {
   const rfa = getRfa(rfaId);
   assertOwnerEditable(user, rfa);
+  if (resubmit && rfa.STATUS !== 'RETURNED') businessError('Only a returned RFA can be resubmitted.');
+  if (!resubmit && rfa.STATUS !== 'DRAFT') businessError('Only a draft RFA can be submitted.');
   validateRfaInput({ requestTitle: rfa.REQUEST_TITLE, purpose: rfa.PURPOSE, budgetAllocation: rfa.BUDGET_ALLOCATION, targetDate: rfa.TARGET_DATE, justification: rfa.JUSTIFICATION }, true);
   if (toBoolean(rfa.IS_BUDGET_REQUEST)) financialRfaFields(user, { isBudgetRequest: true, fiscalYear: rfa.FISCAL_YEAR, expenseCategoryId: rfa.EXPENSE_CATEGORY_ID, requestedAmount: Number(rfa.REQUESTED_AMOUNT) / 100, expenseClassification: rfa.EXPENSE_CLASSIFICATION }, true);
   // Official workflow requires OPEX/CAPEX + strict official assignments at submit time.
@@ -876,6 +886,7 @@ export function submitRfa(user: SessionUser, rfaId: string, resubmit = false): R
     void rejectedAssignments;
     const selections = officialSelectionsFromRfa(rfa);
     const resolved = resolveOfficialAssignments(rfa.DEPARTMENT_ID, selections, Number(rfa.REQUESTED_AMOUNT), rfa.REQUESTER_EMAIL, user.USER_ID, true);
+    assignNumberOnSubmit(rfa);
     saveAssignments(rfa, resolved.assignments, APPROVAL_SECTIONS);
     audit('OPTIONAL_APPROVERS_RESOLVED', user, rfa.RFA_ID, '', '', JSON.stringify({ ...selections, isAcademic: isAcademicDepartment(findBy<DepartmentRecord>('DEPARTMENTS', 'DEPARTMENT_ID', rfa.DEPARTMENT_ID) as DepartmentRecord), thresholdPhp: getThresholdCents() / 100, amountPhp: Number(rfa.REQUESTED_AMOUNT) / 100, needsPresident: Number(rfa.REQUESTED_AMOUNT) >= getThresholdCents() }), {});
   }
@@ -883,10 +894,10 @@ export function submitRfa(user: SessionUser, rfaId: string, resubmit = false): R
     validateExpenseClassification(rfa.EXPENSE_CLASSIFICATION);
     const notedByNa = notedByNotApplicable(auditRows(rfa.RFA_ID));
     const resolved = resolveFixedAssignments(rfa.DEPARTMENT_ID, String(rfa.INVOLVED_DEPARTMENT_ID || ''), notedByNa, rfa.REQUESTER_EMAIL, user.USER_ID, true);
+    assignNumberOnSubmit(rfa);
     saveAssignments(rfa, resolved.assignments, V2_APPROVAL_SECTIONS);
   }
-  if (resubmit && rfa.STATUS !== 'RETURNED') businessError('Only a returned RFA can be resubmitted.');
-  if (!resubmit && rfa.STATUS !== 'DRAFT') businessError('Only a draft RFA can be submitted.');
+  assignNumberOnSubmit(rfa);
 
   const previous = rfa.STATUS;
   const timestamp = nowIso();
@@ -1007,14 +1018,18 @@ export function saveActualExpense(user: SessionUser, rfaId: string, payload: Rec
 /** "My RFAs": only the requests this user filed — for every role, including administrators. */
 export function listRfas(user: SessionUser, filters: Record<string, unknown>, _approvals?: SheetRecord[], records?: RfaRecord[]): RfaRecord[] {
   const email = normalizeEmail(user.EMAIL);
-  return filterRfas((records ?? all<RfaRecord>('RFA')).filter((rfa) => normalizeEmail(rfa.REQUESTER_EMAIL) === email), filters);
+  const schoolYear = Number(filters.schoolYear || 0);
+  const source = schoolYear ? archivedRows<RfaRecord>(schoolYear, 'RFA') : (records ?? all<RfaRecord>('RFA'));
+  return filterRfas(source.filter((rfa) => normalizeEmail(rfa.REQUESTER_EMAIL) === email), filters);
 }
 
 /** "All RFAs": the institution-wide register, limited by allRfasScope(). */
 export function listAllRfas(user: SessionUser, filters: Record<string, unknown>): RfaRecord[] {
   const scope = allRfasScope(user);
   if (scope === 'none') businessError('You do not have access to the All RFAs register.', 'FORBIDDEN');
-  const records = all<RfaRecord>('RFA').filter((rfa) => rfa.STATUS !== 'DRAFT' && (scope === 'all' || APPROVED_STATUSES.includes(rfa.STATUS)));
+  const schoolYear = Number(filters.schoolYear || 0);
+  const source = schoolYear ? archivedRows<RfaRecord>(schoolYear, 'RFA') : all<RfaRecord>('RFA');
+  const records = source.filter((rfa) => rfa.STATUS !== 'DRAFT' && (scope === 'all' || APPROVED_STATUSES.includes(rfa.STATUS)));
   return filterRfas(records, filters);
 }
 
@@ -1077,7 +1092,29 @@ export function dashboardRfas(user: SessionUser): { rfas: RfaRecord[]; approvals
   return { rfas: listRfas(user, {}, approvals, records), approvals: listForApproval(user, approvals, records) };
 }
 
-export function detailRfa(user: SessionUser, rfaId: string): Record<string, unknown> {
+/** Read-only view of an RFA that was moved to a school-year archive. */
+function archivedDetail(user: SessionUser, rfaId: string, schoolYearHint: number): Record<string, unknown> {
+  const found = findArchivedRfa(rfaId, schoolYearHint);
+  if (!found) businessError('RFA was not found.', 'NOT_FOUND');
+  const { schoolYear, rfa } = found;
+  const approvals = archivedRows<SheetRecord>(schoolYear, 'RFA_APPROVALS').filter((row) => row.RFA_ID === rfaId);
+  const history = archivedRows<SheetRecord>(schoolYear, 'RFA_AUDIT').filter((row) => row.RFA_ID === rfaId);
+  assertView(user, rfa, approvals);
+  return {
+    rfa,
+    approvals,
+    attachments: archivedRows<SheetRecord>(schoolYear, 'RFA_ATTACHMENTS').filter((row) => row.RFA_ID === rfaId).map(({ DRIVE_FILE_ID: _hidden, ...attachment }) => attachment),
+    audit: history.map(({ METADATA_JSON: _metadata, ...entry }) => entry),
+    notedByNotApplicable: notedByNotApplicable(history),
+    approvedByOrder: {},
+    financial: financialDetail(rfa),
+    archived: { schoolYear, label: schoolYearLabel(schoolYear) },
+    permissions: { canEdit: false, canDecide: false, canImplement: false, canClose: false, canRecordActualExpense: false }
+  };
+}
+
+export function detailRfa(user: SessionUser, rfaId: string, schoolYearHint = 0): Record<string, unknown> {
+  if (!findBy<RfaRecord>('RFA', 'RFA_ID', rfaId)) return archivedDetail(user, rfaId, schoolYearHint);
   const rfa = getRfa(rfaId);
   const approvals = approvalRows(rfaId);
   const history = auditRows(rfaId);
@@ -1117,7 +1154,8 @@ export function detailRfa(user: SessionUser, rfaId: string): Record<string, unkn
 function rfaFolder(rfa: RfaRecord): GoogleAppsScript.Drive.Folder {
   const rootId = getSetting('ATTACHMENT_ROOT_FOLDER_ID');
   if (!rootId) businessError('Attachment storage is not configured. Run setupDatabase().', 'CONFIGURATION_REQUIRED');
-  const cacheKey = `rfa:${rfa.RFA_NUMBER}`;
+  const folderName = rfa.RFA_NUMBER || draftFolderName(rfa);
+  const cacheKey = `rfa:${folderName}`;
   const cached = folderCache.get(cacheKey);
   if (cached) return cached;
   const year = rfa.RFA_NUMBER.split('-')[1] || new Date().getFullYear().toString();
@@ -1133,8 +1171,8 @@ function rfaFolder(rfa: RfaRecord): GoogleAppsScript.Drive.Folder {
     // Ensure yearFolder still accessible; if cached we still need rfa subfolder
   }
   // yearFolder is now resolved; ensure we have a reference to its parent root only if needed
-  const rfaFolders = yearFolder.getFoldersByName(rfa.RFA_NUMBER);
-  const folder = rfaFolders.hasNext() ? rfaFolders.next() : yearFolder.createFolder(rfa.RFA_NUMBER);
+  const rfaFolders = yearFolder.getFoldersByName(folderName);
+  const folder = rfaFolders.hasNext() ? rfaFolders.next() : yearFolder.createFolder(folderName);
   folderCache.set(cacheKey, folder);
   return folder;
 }
@@ -1162,10 +1200,103 @@ export function uploadAttachment(user: SessionUser, payload: Record<string, unkn
 }
 
 export function downloadAttachment(user: SessionUser, attachmentId: string): SheetRecord {
-  const attachment = findBy<SheetRecord>('RFA_ATTACHMENTS', 'ATTACHMENT_ID', attachmentId);
-  if (!attachment) businessError('Attachment was not found.', 'NOT_FOUND');
-  const rfa = getRfa(String(attachment.RFA_ID));
-  assertView(user, rfa);
+  let attachment = findBy<SheetRecord>('RFA_ATTACHMENTS', 'ATTACHMENT_ID', attachmentId);
+  if (attachment) assertView(user, getRfa(String(attachment.RFA_ID)));
+  else {
+    const archived = findArchivedAttachment(attachmentId);
+    if (!archived) businessError('Attachment was not found.', 'NOT_FOUND');
+    attachment = archived.attachment;
+    const found = findArchivedRfa(String(attachment.RFA_ID), archived.schoolYear);
+    if (!found) businessError('Attachment was not found.', 'NOT_FOUND');
+    assertView(user, found.rfa, archivedRows<SheetRecord>(found.schoolYear, 'RFA_APPROVALS').filter((row) => row.RFA_ID === found.rfa.RFA_ID));
+  }
   const blob = DriveApp.getFileById(String(attachment.DRIVE_FILE_ID)).getBlob();
   return { fileName: attachment.FILE_NAME, mimeType: attachment.MIME_TYPE, base64: Utilities.base64Encode(blob.getBytes()) };
+}
+
+// --- Keeping RFAs moving: who an RFA is waiting on, and handing approvals over ---
+
+export const WAITING_STATUSES = ['SUBMITTED', 'PENDING_RECOMMENDING_APPROVAL', 'PENDING_REVIEW', 'PENDING_AUTHORITY_APPROVAL'];
+
+/**
+ * The approvers an RFA is waiting on right now: assigned to the current step, not yet approved
+ * this round, and (in Approved By) only the group whose turn it is in the email order.
+ * Matches who was emailed and who sees the RFA in For My Action.
+ */
+export function waitingApprovers(rfa: RfaRecord): SheetRecord[] {
+  if (!WAITING_STATUSES.includes(rfa.STATUS) || !isAssignmentWorkflow(rfa)) return [];
+  const section = currentAssignmentSection(rfa);
+  if (!section) return [];
+  if (section === 'APPROVED_BY') return approvedByCurrentEmailTier(rfa).rows;
+  const approvedIds = new Set(getApprovedAssignments(rfa, section).map((row) => String(row.APPROVER_USER_ID)));
+  return getAssignmentsBySection(rfa.RFA_ID, section).filter((row) => !approvedIds.has(String(row.APPROVER_USER_ID)));
+}
+
+/** When the RFA started waiting on its current approvers: the later of submission and the last approval. */
+export function waitingSince(rfa: RfaRecord): string {
+  const actions = approvalRows(rfa.RFA_ID).filter((row) => row.ACTION === 'APPROVED').map((row) => String(row.TIMESTAMP || ''));
+  return [String(rfa.SUBMITTED_AT || ''), ...actions].filter(Boolean).sort().pop() || String(rfa.UPDATED_AT || '');
+}
+
+/**
+ * Hand pending approvals from one person to another (resignation, leave, role change).
+ * With an RFA ID it moves that RFA only; without one it moves every waiting RFA of that person.
+ * Already-given approvals are never changed. `preview: true` lists what would move without saving.
+ */
+export function reassignApprovals(actor: SessionUser, payload: Record<string, unknown>): Record<string, unknown> {
+  if (!toBoolean(actor.IS_ADMIN)) businessError('Only an administrator can hand over approvals.', 'FORBIDDEN');
+  const fromId = String(payload.fromUserId || '').trim();
+  const toId = String(payload.toUserId || '').trim();
+  const reason = String(payload.reason || '').trim();
+  const rfaId = String(payload.rfaId || '').trim();
+  const preview = payload.preview === true;
+  if (!fromId) businessError('Choose whose approvals to hand over.');
+  if (!preview) {
+    if (!toId) businessError('Choose who will take over the approvals.');
+    if (toId === fromId) businessError('Choose a different person to take over.');
+    if (reason.length < 3) businessError('Give a short reason, for example "On leave until June".');
+  }
+  const to = toId ? findBy<UserRecord>('USERS', 'USER_ID', toId) : undefined;
+  if (!preview && (!to || !toBoolean(to.ACTIVE) || !toBoolean(to.CAN_APPROVE_RFA))) businessError('The new approver must be an active user with approval permission.');
+
+  const candidates = rfaId ? [getRfa(rfaId)] : all<RfaRecord>('RFA');
+  const moved: Array<{ rfaId: string; rfaNumber: string; title: string; steps: string[] }> = [];
+  const skipped: Array<{ rfaNumber: string; reason: string }> = [];
+  for (const rfa of candidates) {
+    if (!WAITING_STATUSES.includes(rfa.STATUS)) { if (rfaId) businessError('Only an RFA that is waiting for approval can be handed over.'); continue; }
+    const rows = approvalRows(rfa.RFA_ID);
+    const pending = rows.filter((row) => row.ACTION === '' && String(row.APPROVER_USER_ID) === fromId)
+      .filter((row) => !getApprovedAssignments(rfa, row.STEP as ApprovalSection).some((done) => String(done.APPROVER_USER_ID) === fromId));
+    const legacyCurrent = !isAssignmentWorkflow(rfa) && String(rfa.CURRENT_APPROVER_USER_ID) === fromId;
+    if (!pending.length && !legacyCurrent) continue;
+    if (to && normalizeEmail(rfa.REQUESTER_EMAIL) === normalizeEmail(to.EMAIL)) { skipped.push({ rfaNumber: rfa.RFA_NUMBER, reason: 'the new approver filed this RFA' }); continue; }
+    const clash = pending.find((row) => rows.some((other) => other.STEP === row.STEP && String(other.APPROVER_USER_ID) === toId));
+    if (clash) { skipped.push({ rfaNumber: rfa.RFA_NUMBER, reason: 'the new approver is already in that step' }); continue; }
+    moved.push({ rfaId: rfa.RFA_ID, rfaNumber: rfa.RFA_NUMBER, title: rfa.REQUEST_TITLE, steps: [...new Set(pending.map((row) => String(row.STEP)))] });
+    if (preview || !to) continue;
+    const waitingBefore = new Set(waitingApprovers(rfa).map((row) => String(row.APPROVER_USER_ID)));
+    const from = findBy<UserRecord>('USERS', 'USER_ID', fromId);
+    for (const row of pending) {
+      // Keep the original person's place in the email order, and say who the stand-in replaced.
+      const original = String(row.REMARKS || '').match(STAND_IN)?.[1] || fromId;
+      const originalName = original === fromId ? String(from?.FULL_NAME || fromId) : String(findBy<UserRecord>('USERS', 'USER_ID', original)?.FULL_NAME || original);
+      updateBy('RFA_APPROVALS', 'APPROVAL_ID', String(row.APPROVAL_ID), { APPROVER_USER_ID: to.USER_ID, APPROVER_NAME: to.FULL_NAME, APPROVER_EMAIL: to.EMAIL, REMARKS: standInNote(originalName, original) });
+    }
+    if (legacyCurrent) updateBy('RFA', 'RFA_ID', rfa.RFA_ID, { CURRENT_APPROVER_USER_ID: to.USER_ID, CURRENT_APPROVER_EMAIL: to.EMAIL, UPDATED_AT: nowIso() });
+    audit('APPROVER_REASSIGNED', actor, rfa.RFA_ID, rfa.STATUS, rfa.STATUS, reason, { fromUserId: fromId, toUserId: to.USER_ID, toName: to.FULL_NAME, steps: moved[moved.length - 1].steps });
+    // Everyone whose turn it is now and who was not already waiting gets the usual "Action required"
+    // email straight away: the stand-in, and anyone whose turn started because of the hand-over.
+    const refreshed = getRfa(rfa.RFA_ID);
+    const newlyWaiting = waitingApprovers(refreshed).filter((row) => !waitingBefore.has(String(row.APPROVER_USER_ID)) || String(row.APPROVER_USER_ID) === to.USER_ID);
+    const notified = new Set<string>();
+    if (legacyCurrent) { notify('APPROVAL_REQUIRED', to, refreshed, actor, `Handed over to you: ${reason}`); notified.add(to.USER_ID); }
+    for (const row of newlyWaiting) {
+      const id = String(row.APPROVER_USER_ID);
+      if (notified.has(id)) continue;
+      notified.add(id);
+      notify('APPROVAL_REQUIRED', { FULL_NAME: String(row.APPROVER_NAME || ''), EMAIL: String(row.APPROVER_EMAIL || '') } as UserRecord, refreshed, actor, id === to.USER_ID ? `Handed over to you: ${reason}` : '');
+    }
+  }
+  if (rfaId && !moved.length && !skipped.length) businessError('That person has no pending approval on this RFA.');
+  return { preview, moved, skipped, count: moved.length };
 }

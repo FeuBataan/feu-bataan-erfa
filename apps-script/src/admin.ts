@@ -4,6 +4,7 @@ import { requireCapability } from './auth';
 import { all, allTail, findBy, getDatabase, getSetting, insert, newId, nowIso, setSetting, updateBy } from './store';
 import type { ApprovalStep, DepartmentHeadRecord, DepartmentRecord, MatrixRecord, RfaRecord, SessionUser, SheetRecord, UserRecord } from './types';
 import { APPROVAL_STEPS, SHEETS } from './constants';
+import { loadRoles, rememberFormerHolders, saveRoles } from './roles';
 
 function required(value: unknown, label: string): string {
   const clean = String(value ?? '').trim();
@@ -18,6 +19,7 @@ export function adminData(user: SessionUser): Record<string, unknown> {
   try { heads = all<DepartmentHeadRecord>('DEPARTMENT_HEADS'); } catch { heads = []; }
   return {
     users: all<UserRecord>('USERS'), departments: all<DepartmentRecord>('DEPARTMENTS'), matrix: all<MatrixRecord>('APPROVAL_MATRIX'), heads,
+    roles: loadRoles(),
     settings: {
       presidentThresholdPhp: getSetting('PRESIDENT_THRESHOLD_PHP') || '50000',
       reviewedMandatoryUserId: getSetting('REVIEWED_MANDATORY_USER_ID') || '',
@@ -25,9 +27,7 @@ export function adminData(user: SessionUser): Record<string, unknown> {
       vpAcademicUserId: getSetting('VP_ACADEMIC_USER_ID') || '',
       presidentUserId: getSetting('PRESIDENT_USER_ID') || '',
       principalUserId: getSetting('PRINCIPAL_USER_ID') || '',
-      procurementUserId: getSetting('PROCUREMENT_USER_ID') || '',
-      vpAdminFinanceEmail: getSetting('VP_ADMIN_FINANCE_EMAIL') || '',
-      presidentEmail: getSetting('PRESIDENT_EMAIL') || ''
+      procurementUserId: getSetting('PROCUREMENT_USER_ID') || ''
     },
     audit: allTail<SheetRecord>('RFA_AUDIT', 500).reverse(), notifications: allTail<SheetRecord>('NOTIFICATIONS', 500).reverse()
   };
@@ -63,6 +63,15 @@ export function removeDepartmentHead(actor: SessionUser, payload: Record<string,
   audit('DEPARTMENT_HEAD_CHANGED', actor, '', '', '', 'head deactivated', { headId });
 }
 
+/** Save the full list of approval roles (title, person, stage, when it applies, email order, access, on/off). */
+export function saveApprovalRoles(actor: SessionUser, payload: Record<string, unknown>): Record<string, unknown> {
+  requireCapability(actor, 'IS_ADMIN');
+  const usersById = new Map(all<UserRecord>('USERS').map((u) => [u.USER_ID, u]));
+  const roles = saveRoles(payload.roles, usersById);
+  audit('APPROVAL_ROLES_CHANGED', actor, '', '', '', `${roles.length} approval roles saved`, { roles: roles.map((r) => ({ id: r.ROLE_ID, title: r.TITLE, userId: r.USER_ID, stage: r.STAGE, condition: r.CONDITION, active: r.ACTIVE })) });
+  return adminData(actor);
+}
+
 export function saveApprovalSettings(actor: SessionUser, payload: Record<string, unknown>): Record<string, unknown> {
   requireCapability(actor, 'IS_ADMIN');
   const thresholdRaw = String(payload.presidentThresholdPhp ?? '').trim();
@@ -71,23 +80,28 @@ export function saveApprovalSettings(actor: SessionUser, payload: Record<string,
     parsePresidentThresholdCents(thresholdRaw);
     setSetting('PRESIDENT_THRESHOLD_PHP', String(Number(thresholdRaw.replace(/,/g, ''))), 'Presidential approval threshold in PHP (inclusive)');
   }
-  // Optional official emails; when both are set they must be separate accounts.
-  const vpAdminFinanceEmail = normalizeEmail(String(payload.vpAdminFinanceEmail ?? getSetting('VP_ADMIN_FINANCE_EMAIL') ?? '').trim());
-  const presidentEmail = normalizeEmail(String(payload.presidentEmail ?? getSetting('PRESIDENT_EMAIL') ?? '').trim());
-  const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (vpAdminFinanceEmail && !emailPattern.test(vpAdminFinanceEmail)) throw new Error('VP for Admin and Finance email is invalid.');
-  if (presidentEmail && !emailPattern.test(presidentEmail)) throw new Error('President email is invalid.');
-  if (vpAdminFinanceEmail && vpAdminFinanceEmail === presidentEmail) throw new Error('The VP for Admin and Finance and the President must use separate email accounts.');
-  setSetting('VP_ADMIN_FINANCE_EMAIL', vpAdminFinanceEmail, 'Optional email of the VP for Admin and Finance (used when no user ID is set)');
-  setSetting('PRESIDENT_EMAIL', presidentEmail, 'Optional email of the President (used when no user ID is set)');
+  // Roles are now saved with admin.roles.save. Only touch the older role settings when a caller
+  // still sends them, so saving the threshold alone can never clear anyone's role.
+  const roleFields = ['reviewedMandatoryUserId', 'approvedMandatoryUserIds', 'vpAcademicUserId', 'presidentUserId', 'principalUserId', 'procurementUserId'];
+  if (!roleFields.some((field) => Object.prototype.hasOwnProperty.call(payload, field))) {
+    audit('APPROVAL_SETTINGS_CHANGED', actor, '', '', '', 'threshold updated', { thresholdPhp: thresholdRaw });
+    return adminData(actor);
+  }
+  // Each official role is a fixed function; the person is whoever is selected here.
+  // APPROVED_MANDATORY_USER_IDS is positional: [0] Finance Official (emailed first), [1] VP for Admin and Finance.
+  const approvedIds = String(payload.approvedMandatoryUserIds ?? '').split(',').map((s) => s.trim());
+  const presidentId = String(payload.presidentUserId || '').trim();
+  const approvedRoleHolders = [approvedIds[0], approvedIds[1], presidentId].filter(Boolean);
+  if (new Set(approvedRoleHolders).size !== approvedRoleHolders.length) throw new Error('One person cannot hold two Approved By roles. Choose a different person for Finance Official, VP for Admin and Finance, and President.');
   const setters: Array<[string, string, string]> = [
-    ['REVIEWED_MANDATORY_USER_ID', String(payload.reviewedMandatoryUserId || ''), 'Reviewed and Noted By mandatory approver user ID'],
-    ['APPROVED_MANDATORY_USER_IDS', String(payload.approvedMandatoryUserIds || ''), 'Approved By mandatory approver user IDs, comma-separated: Finance official first, then VP for Admin and Finance'],
-    ['VP_ACADEMIC_USER_ID', String(payload.vpAcademicUserId || ''), 'VP for Academic Affairs user ID'],
-    ['PRESIDENT_USER_ID', String(payload.presidentUserId || ''), 'President user ID'],
-    ['PRINCIPAL_USER_ID', String(payload.principalUserId || ''), 'JHS/SHS Principal user ID'],
-    ['PROCUREMENT_USER_ID', String(payload.procurementUserId || ''), 'Procurement user ID (view-only access to approved RFAs)']
+    ['REVIEWED_MANDATORY_USER_ID', String(payload.reviewedMandatoryUserId || ''), 'Role: Reviewed and Noted By (mandatory) - user ID'],
+    ['APPROVED_MANDATORY_USER_IDS', approvedIds.some(Boolean) ? approvedIds.join(',') : '', 'Roles: Approved By - Finance Official (first), VP for Admin and Finance (second) - user IDs, in this order'],
+    ['VP_ACADEMIC_USER_ID', String(payload.vpAcademicUserId || ''), 'Role: VP for Academic Affairs - user ID'],
+    ['PRESIDENT_USER_ID', presidentId, 'Role: President - user ID'],
+    ['PRINCIPAL_USER_ID', String(payload.principalUserId || ''), 'Role: JHS/SHS Principal - user ID'],
+    ['PROCUREMENT_USER_ID', String(payload.procurementUserId || ''), 'Role: Procurement - user ID']
   ];
+  const rolesBefore = loadRoles();
   for (const [key, value, description] of setters) {
     const trimmed = value.trim();
     if (trimmed) {
@@ -99,7 +113,13 @@ export function saveApprovalSettings(actor: SessionUser, payload: Record<string,
     }
     setSetting(key, trimmed, description);
   }
-  audit('APPROVAL_SETTINGS_CHANGED', actor, '', '', '', 'approval settings updated', {});
+  // Keep the older email settings in step with whoever now holds those roles, so nothing
+  // keeps pointing at a previous person.
+  const emailOf = (id: string) => (id ? normalizeEmail(String(findBy<UserRecord>('USERS', 'USER_ID', id)?.EMAIL || '')) : '');
+  if (emailOf(approvedIds[1] || '')) setSetting('VP_ADMIN_FINANCE_EMAIL', emailOf(approvedIds[1] || ''), 'Email of the VP for Admin and Finance role (follows Approval settings)');
+  if (emailOf(presidentId)) setSetting('PRESIDENT_EMAIL', emailOf(presidentId), 'Email of the President role (follows Approval settings)');
+  rememberFormerHolders(rolesBefore, loadRoles());
+  audit('APPROVAL_SETTINGS_CHANGED', actor, '', '', '', 'approval settings updated', { reviewed: String(payload.reviewedMandatoryUserId || ''), approved: approvedIds.join(','), vpAcademic: String(payload.vpAcademicUserId || ''), president: presidentId, principal: String(payload.principalUserId || '') });
   return adminData(actor);
 }
 
@@ -184,6 +204,22 @@ export function saveDepartment(actor: SessionUser, payload: Record<string, unkno
   insert('DEPARTMENTS', record);
   audit('DEPARTMENT_CREATED', actor, '', '', '', name, { departmentId: record.DEPARTMENT_ID });
   return record;
+}
+
+/**
+ * Turn off Approval Matrix rows whose department or approver no longer exists (left over after
+ * a data clean-up). They could never route anything; switching them off keeps the matrix simple.
+ * Rows are kept (inactive) for history, never deleted.
+ */
+export function turnOffLeftoverMatrixRows(actor: SessionUser): Record<string, unknown> {
+  requireCapability(actor, 'IS_ADMIN');
+  const departmentIds = new Set(all<DepartmentRecord>('DEPARTMENTS').map((d) => String(d.DEPARTMENT_ID)));
+  const userIds = new Set(all<UserRecord>('USERS').map((u) => String(u.USER_ID)));
+  const leftovers = all<MatrixRecord>('APPROVAL_MATRIX').filter((row) => toBoolean(row.ACTIVE) && (!departmentIds.has(String(row.DEPARTMENT_ID)) || !userIds.has(String(row.APPROVER_USER_ID))));
+  const timestamp = nowIso();
+  for (const row of leftovers) updateBy('APPROVAL_MATRIX', 'MATRIX_ID', String(row.MATRIX_ID), { ACTIVE: false, UPDATED_AT: timestamp });
+  if (leftovers.length) audit('MATRIX_LEFTOVERS_TURNED_OFF', actor, '', '', '', `${leftovers.length} leftover matrix rows turned off`, { matrixIds: leftovers.map((row) => row.MATRIX_ID) });
+  return { ...adminData(actor), turnedOff: leftovers.length };
 }
 
 export function saveMatrix(actor: SessionUser, payload: Record<string, unknown>): MatrixRecord {

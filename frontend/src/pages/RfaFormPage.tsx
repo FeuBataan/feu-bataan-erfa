@@ -1,10 +1,10 @@
-import { ArrowLeft, FileText, Paperclip, Save, Send, X } from 'lucide-react';
+import { ArrowLeft, Check, FileText, Paperclip, Save, Send, X } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, fileToBase64 } from '../api';
 import { useAuth } from '../auth';
 import { ErrorNotice, Spinner } from '../components';
-import { dateInputValue, displayName, fiscalYearPattern, isFiscalYear, money } from '../format';
+import { currentSchoolYear, dateInputValue, displayName, isFiscalYear, money, schoolYearLabel } from '../format';
 import type { ApprovalAssignments, ApprovalSection, Department, EligibleApprover, EmployeeDirectory, Rfa, RfaDetail } from '../types';
 
 interface FormState {
@@ -24,7 +24,7 @@ interface FormState {
 }
 const blank: FormState = {
   requestTitle: '', purpose: '', budgetAllocation: '', targetDate: '', justification: '',
-  fiscalYear: String(new Date().getFullYear()), requestedAmount: '', expenseClassification: '',
+  fiscalYear: String(currentSchoolYear()), requestedAmount: '', expenseClassification: '',
   purchaseRequest: false, involvedDepartmentIds: [], recommendingAlternateUserId: '',
   includePrincipal: false, includeProcurement: false
 };
@@ -79,7 +79,7 @@ export function RfaFormPage() {
       setForm({
         requestTitle: rfa.REQUEST_TITLE, purpose: rfa.PURPOSE, budgetAllocation: String(rfa.BUDGET_ALLOCATION || ''),
         targetDate: dateInputValue(rfa.TARGET_DATE), justification: rfa.JUSTIFICATION,
-        fiscalYear: rfa.FISCAL_YEAR || String(new Date().getFullYear()), requestedAmount: requested,
+        fiscalYear: rfa.FISCAL_YEAR || String(currentSchoolYear()), requestedAmount: requested,
         expenseClassification: rfa.EXPENSE_CLASSIFICATION || '',
         purchaseRequest: Boolean(rfa.PURCHASE_REQUEST ?? financial?.purchaseRequest),
         involvedDepartmentIds: involvedIds,
@@ -118,9 +118,9 @@ export function RfaFormPage() {
     try {
       const isV2Edit = existing?.CURRENT_MATRIX_ID === fixedV2Marker;
       if (!usesLegacyWorkflow && !isV2Edit) {
-        if (!form.expenseClassification) throw new Error('Expense Classification is required: select OPEX or CAPEX.');
+        if (!form.expenseClassification) throw new Error('Expense Classification is required: tick OPEX or CAPEX.');
         if (!['OPEX', 'CAPEX'].includes(form.expenseClassification)) throw new Error('Expense Classification must be OPEX or CAPEX.');
-        if (!isFiscalYear(form.fiscalYear)) throw new Error('Fiscal Year must be a four-digit year.');
+        if (!isFiscalYear(form.fiscalYear)) throw new Error('The school year could not be determined. Please reload and try again.');
         if (!form.requestedAmount || Number(form.requestedAmount) <= 0) throw new Error('Requested Amount is required.');
         if (form.includePrincipal && fixedRoute && !fixedRoute.isJhsOrShs) throw new Error('The JHS/SHS Principal is only available for Junior High School or Senior High School departments.');
       }
@@ -189,7 +189,7 @@ export function RfaFormPage() {
     <Link className="back-link" to={existing ? `/rfa/${existing.RFA_ID}` : '/rfas'}><ArrowLeft size={16} /> Back</Link>
     <header className="page-header">
       <div>
-        <span className="eyebrow orange">{existing ? existing.RFA_NUMBER : 'NEW REQUEST'}</span>
+        <span className="eyebrow orange">{existing?.RFA_NUMBER || (existing ? 'DRAFT · NUMBER GIVEN WHEN SUBMITTED' : 'NEW REQUEST · NUMBER GIVEN WHEN SUBMITTED')}</span>
         <h1>{existing?.STATUS === 'RETURNED' ? 'Revise and resubmit RFA' : existing ? 'Edit RFA draft' : 'Request for Approval'}</h1>
         <p>This digital form preserves the fields and approval terminology of the institutional RFA.</p>
       </div>
@@ -216,15 +216,19 @@ export function RfaFormPage() {
       <section className="form-card">
         <div className="section-title"><span>02</span><div><h2>Expense information</h2><p>Classify the requested expense. No department budget balance is required to submit.</p></div></div>
         <div className="form-grid">
-          <label className="field"><span>Fiscal Year <b>*</b></span><input required inputMode="numeric" maxLength={4} pattern={fiscalYearPattern} title="Enter a four-digit fiscal year, for example 2026." value={form.fiscalYear} onChange={(e) => set('fiscalYear', e.target.value)} /></label>
+          <div className="readonly school-year-field"><span>School Year</span><b>{schoolYearLabel(form.fiscalYear)}</b><small>Set automatically from the filing date (June to May).</small></div>
           <label className="field"><span>Requested Amount (PHP) <b>*</b></span><input required min="0.01" step="0.01" type="number" value={form.requestedAmount} onChange={(e) => set('requestedAmount', e.target.value)} placeholder="0.00" /></label>
-          <label className="field"><span>Expense Classification <b>*</b></span>
-            <select required value={form.expenseClassification} onChange={(e) => set('expenseClassification', e.target.value)}>
-              <option value="">Select classification</option>
-              <option value="OPEX">OPEX — Operating Expenditure</option>
-              <option value="CAPEX">CAPEX — Capital Expenditure</option>
-            </select>
-          </label>
+          <fieldset className="tick-group">
+            <legend>Expense Classification <b>*</b></legend>
+            {[
+              { value: 'OPEX', title: 'OPEX', text: 'Operating Expenditure: supplies, services, events, repairs' },
+              { value: 'CAPEX', title: 'CAPEX', text: 'Capital Expenditure: equipment, furniture, construction' }
+            ].map((option) => <label key={option.value} className={`tick-option${form.expenseClassification === option.value ? ' checked' : ''}`}>
+              <input type="radio" name="expenseClassification" value={option.value} required checked={form.expenseClassification === option.value} onChange={() => set('expenseClassification', option.value)} />
+              <span className="tick-box" aria-hidden><Check size={14} /></span>
+              <span className="tick-text"><b>{option.title}</b><small>{option.text}</small></span>
+            </label>)}
+          </fieldset>
         </div>
         <p className="muted">Amounts are monitored by department as Total OPEX + Total CAPEX. Presidential approval is {needsPresident ? 'required' : 'not required'} at {money(threshold)} threshold (amount: {money(amount || 0)}).</p>
         {isAcademic && <p className="muted">Academic department: VP for Academic Affairs is automatically included in Approved By.</p>}
@@ -304,7 +308,7 @@ export function RfaFormPage() {
       {!usesLegacyWorkflow && <section className="form-card approval-assignment-card">
         <div className="section-title">
           <span>06</span>
-          <div><h2>Approval route — official matrix</h2><p>Assigned automatically. Mandatory approvers cannot be removed.</p></div>
+          <div><h2>Approval route</h2><p>Assigned automatically from your department heads and the approval roles. Required approvers cannot be removed.</p></div>
         </div>
         <div className="route-names">
           <RouteStage title="Prepared By" names={[existing?.REQUESTED_BY || user?.FULL_NAME || 'Requester']} note={existing?.POSITION || user?.POSITION || ''} />

@@ -1,13 +1,18 @@
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
 const TOKEN_KEY = 'erfa_google_id_token';
-const coalescedReads = new Set(['session', 'dashboard.home', 'dashboard.rfas', 'rfa.list', 'rfa.all', 'rfa.forApproval', 'rfa.detail', 'rfa.eligibleApprovers', 'rfa.departments', 'rfa.fixedRoute', 'expense.monitoring', 'admin.audit', 'admin.data', 'admin.budget.summary', 'admin.budget.overview', 'admin.budget.management', 'admin.category.list', 'admin.budget.report', 'admin.budget.expenses', 'admin.budget.detail', 'budget.context']);
+const coalescedReads = new Set(['session', 'dashboard.home', 'dashboard.rfas', 'rfa.list', 'rfa.all', 'rfa.forApproval', 'rfa.detail', 'rfa.archives', 'rfa.eligibleApprovers', 'rfa.departments', 'rfa.fixedRoute', 'expense.monitoring', 'admin.audit', 'admin.data', 'admin.budget.summary', 'admin.budget.overview', 'admin.budget.management', 'admin.category.list', 'admin.budget.report', 'admin.budget.expenses', 'admin.budget.detail', 'budget.context']);
 const pendingReads = new Map<string, Promise<unknown>>();
 // Short-lived cache for list/lookup reads so moving between pages is instant.
 // Any write (non-read action) or sign-out clears it, so users never act on stale data after their own changes.
-const cachedReads = new Set(['dashboard.home', 'dashboard.rfas', 'rfa.list', 'rfa.all', 'rfa.forApproval', 'rfa.departments', 'rfa.fixedRoute', 'admin.category.list', 'budget.context']);
+const cachedReads = new Set(['dashboard.home', 'dashboard.rfas', 'rfa.list', 'rfa.all', 'rfa.archives', 'rfa.forApproval', 'rfa.departments', 'rfa.fixedRoute', 'admin.category.list', 'budget.context']);
 const READ_CACHE_TTL_MS = 30_000;
 const readCache = new Map<string, { at: number; data: unknown }>();
 export function clearReadCache(): void { readCache.clear(); }
+
+// Notified after every successful change (approve, submit, save…), so counts like the
+// For My Action bubble refresh immediately instead of on the next page change.
+const changeListeners = new Set<() => void>();
+export function onDataChanged(listener: () => void): () => void { changeListeners.add(listener); return () => { changeListeners.delete(listener); }; }
 
 // Last successful answer per read, kept for the whole visit (not just 30 s) so a page can
 // show it instantly while a fresh copy loads. Cleared by any write and by sign-out.
@@ -97,7 +102,7 @@ export async function api<T>(action: string, payload: Record<string, unknown> = 
       throw new ApiError(code, result.error?.message ?? 'The request could not be completed.');
     }
     if (cacheable) readCache.set(key, { at: Date.now(), data: result.data });
-    else if (!key) { clearReadCache(); lastGood.clear(); }
+    else if (!key) { clearReadCache(); lastGood.clear(); queueMicrotask(() => changeListeners.forEach((listener) => listener())); }
     if (key && action !== 'session') lastGood.set(viewKey(action, payload), result.data);
     return result.data;
     } finally {

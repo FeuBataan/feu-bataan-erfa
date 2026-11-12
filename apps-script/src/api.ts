@@ -2,12 +2,14 @@ import { APP_VERSION } from './constants';
 import { timed } from './performance';
 import { dashboardHome } from './dashboard';
 import { authenticate, requireCapability } from './auth';
-import { adminAudit, adminData, cleanImportedData, removeDepartmentHead, saveApprovalSettings, saveDepartment, saveDepartmentHead, saveMatrix, saveUser } from './admin';
+import { adminAudit, adminData, saveApprovalRoles, turnOffLeftoverMatrixRows, cleanImportedData, removeDepartmentHead, saveApprovalSettings, saveDepartment, saveDepartmentHead, saveMatrix, saveUser } from './admin';
 import { importUsersFromList } from './importUsers';
 import { adjustBudget, adminBudgetManagement, adminBudgetOverview, adminBudgetSummary, adminExpenseCategories, budgetReport, departmentExpenseReport, departmentFinancialDetail, expenseMonitoringReport, requesterBudgetContext, saveBudget, saveCategory, setOverBudget } from './budget';
 import { getDatabase, resetPerRequestCache } from './store';
 import { resetWorkflowCache } from './workflow';
-import { allRfasScope, createRfa, dashboardRfas, decideRfa, detailRfa, downloadAttachment, eligibleApprovers, fixedRoutePreview, listDepartments, listAllRfas, listForApproval, listRfas, saveActualExpense, submitRfa, transitionCloseout, updateRfa, uploadAttachment } from './workflow';
+import { archiveYears, resetArchiveCache } from './archive';
+import { maintenanceStatus } from './maintenance';
+import { allRfasScope, createRfa, dashboardRfas, decideRfa, detailRfa, downloadAttachment, eligibleApprovers, fixedRoutePreview, listDepartments, listAllRfas, listForApproval, listRfas, reassignApprovals, saveActualExpense, submitRfa, transitionCloseout, updateRfa, uploadAttachment } from './workflow';
 
 export interface ApiRequest { action: string; idToken?: string; payload?: Record<string, unknown>; performance?: boolean }
 
@@ -18,6 +20,7 @@ export function dispatch(request: ApiRequest): unknown {
 function dispatchRequest(request: ApiRequest): unknown {
   resetPerRequestCache();
   resetWorkflowCache();
+  resetArchiveCache();
   if (request.action === 'health') return { version: APP_VERSION, status: 'ok', timestamp: new Date().toISOString() };
   const user = timed('authenticationMs', () => authenticate(String(request.idToken ?? '')));
   const payload = request.payload ?? {};
@@ -29,7 +32,8 @@ function dispatchRequest(request: ApiRequest): unknown {
     case 'rfa.list': return listRfas(user, payload);
     case 'rfa.all': return listAllRfas(user, payload);
     case 'rfa.forApproval': return listForApproval(user);
-    case 'rfa.detail': return detailRfa(user, String(payload.rfaId ?? ''));
+    case 'rfa.detail': return detailRfa(user, String(payload.rfaId ?? ''), Number(payload.schoolYear || 0));
+    case 'rfa.archives': return archiveYears();
     case 'rfa.eligibleApprovers': return eligibleApprovers(user);
     case 'rfa.departments': return listDepartments(user);
     case 'rfa.fixedRoute': return fixedRoutePreview(user);
@@ -57,6 +61,9 @@ function dispatchRequest(request: ApiRequest): unknown {
     case 'admin.data.clean': return withLock(() => cleanImportedData(user, payload));
     case 'admin.users.import': return withLock(() => importUsersFromList(user, payload));
     case 'admin.settings.save': return withLock(() => saveApprovalSettings(user, payload));
+    case 'admin.matrix.cleanup': return withLock(() => turnOffLeftoverMatrixRows(user));
+    case 'admin.roles.save': return withLock(() => saveApprovalRoles(user, payload));
+    case 'admin.approvals.reassign': return payload.preview === true ? reassignApprovals(user, payload) : withLock(() => reassignApprovals(user, payload));
     case 'admin.matrix.save': return withLock(() => saveMatrix(user, payload));
     case 'admin.budget.overview': return adminBudgetOverview(user, payload.fiscalYear);
     case 'admin.budget.management': return adminBudgetManagement(user, payload.fiscalYear);
@@ -69,6 +76,7 @@ function dispatchRequest(request: ApiRequest): unknown {
     case 'admin.budget.report': return budgetReport(user, payload);
     case 'admin.budget.expenses': return departmentExpenseReport(user, payload);
     case 'admin.budget.detail': return departmentFinancialDetail(user, payload);
+    case 'admin.maintenance.status': requireCapability(user, 'IS_ADMIN'); return maintenanceStatus();
     case 'admin.database': requireCapability(user, 'IS_ADMIN'); return { spreadsheetId: getDatabase().getId(), spreadsheetUrl: getDatabase().getUrl() };
     default: throw Object.assign(new Error('Unknown API action.'), { code: 'NOT_FOUND' });
   }
