@@ -619,7 +619,7 @@ describe('configurable approval roles', () => {
     role({ ROLE_ID: 'REVIEWED', TITLE: 'Reviewed and Noted By', STAGE: 'REVIEWED_AND_NOTED', USER_ID: 'reviewer', SORT: 10 }),
     role({ ROLE_ID: 'APPROVED_FIRST', TITLE: 'Finance Official', EMAIL_ORDER: 0, USER_ID: 'finance', SORT: 20 }),
     role({ ROLE_ID: 'VP_FINANCE', TITLE: 'VP for Admin and Finance', USER_ID: 'vpAdmin', SORT: 30 }),
-    role({ ROLE_ID: 'VP_ACADEMIC', TITLE: 'VP for Academic Affairs', CONDITION: 'ACADEMIC', USER_ID: 'jennelyn', SORT: 40 }),
+    role({ ROLE_ID: 'VP_ACADEMIC', TITLE: 'VP for Academic Affairs', CONDITION: 'ACADEMIC', USER_ID: 'vpAcademic', SORT: 40 }),
     role({ ROLE_ID: 'PRESIDENT', TITLE: 'President', CONDITION: 'AT_OR_ABOVE_THRESHOLD', EMAIL_ORDER: 2, USER_ID: 'president', SORT: 50 }),
     role({ ROLE_ID: 'PRINCIPAL', TITLE: 'JHS/SHS Principal', STAGE: 'REVIEWED_AND_NOTED', CONDITION: 'JHS_SHS_OPTIONAL', ALL_RFAS_ACCESS: false, USER_ID: 'principal', SORT: 60 })
   ];
