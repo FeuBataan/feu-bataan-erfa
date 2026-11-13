@@ -914,3 +914,12 @@ td[data-label="Requested Amount"], td[data-label="Date Filed"], td[data-label="C
 }
 @media (max-width: 620px) { .workflow-steps { grid-template-columns: 1fr 1fr; } }
 td[data-label="RFA"], td[data-label="Date"], td[data-label="Date Filed"], td[data-label="RFA Number"] { white-space: nowrap; }
+
+/* PDF only for final RFAs (approved or cancelled); cancelled copies are clearly marked */
+.print-cancelled { display: none; }
+@media print {
+  .rfa-document.not-final > * { display: none !important; }
+  .rfa-document.not-final::before { content: "This RFA is not final yet. A PDF is available once it is approved or cancelled."; display: block; padding: 40mm 10mm; text-align: center; font-size: 14pt; }
+  .rfa-document.is-cancelled { position: relative; }
+  .rfa-document.is-cancelled .print-cancelled { display: block !important; position: absolute; top: 38%; left: 0; right: 0; text-align: center; font-size: 72pt; font-weight: 800; letter-spacing: .12em; color: rgba(185, 28, 28, .16); transform: rotate(-24deg); pointer-events: none; z-index: 5; }
+}
