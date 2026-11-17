@@ -164,7 +164,8 @@ export function RfaDetailPage() {
           <Fact label="School Year" value={schoolYearLabel(financial?.fiscalYear || rfa.FISCAL_YEAR || '')} />
           <Fact label="Expense Classification" value={expenseClassificationLabel(rfa.EXPENSE_CLASSIFICATION || financial?.expenseClassification)} />
           <Fact label="Requested Amount" value={money(financial?.requestedAmount ?? (rfa.REQUESTED_AMOUNT ? rfa.REQUESTED_AMOUNT / 100 : rfa.BUDGET_ALLOCATION))} />
-          <Fact label="Purchase Request" value={rfa.PURCHASE_REQUEST || financial?.purchaseRequest ? 'Yes' : 'No'} />
+          {/* No longer asked on the form; shown only for older RFAs that were marked as a purchase request. */}
+          {(rfa.PURCHASE_REQUEST || financial?.purchaseRequest) && <Fact label="Purchase Request" value="Yes" />}
           <Fact label="Target Date" value={date(rfa.TARGET_DATE)} />
           {(rfa.INVOLVED_DEPARTMENT_NAME || financial?.involvedDepartmentName) && <Fact label="Involved Department(s)" value={rfa.INVOLVED_DEPARTMENT_NAME || financial?.involvedDepartmentName || ''} />}
           {financial?.approvedAmount ? <Fact label="Approved Amount" value={money(financial.approvedAmount)} /> : null}
