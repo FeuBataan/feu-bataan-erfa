@@ -157,7 +157,7 @@ export function RfaDetailPage() {
         <Fact label="Project / Activity / Request Title" value={rfa.REQUEST_TITLE} wide />
       </section>
 
-      <DocumentSection title="Purpose"><p>{rfa.PURPOSE || '—'}</p></DocumentSection>
+      <DocumentSection title="Purpose and Justification"><p>{rfa.PURPOSE || '—'}</p></DocumentSection>
 
       <DocumentSection title="Expense Information">
         <section className="request-grid two">
@@ -173,7 +173,8 @@ export function RfaDetailPage() {
         </section>
       </DocumentSection>
 
-      <DocumentSection title="Justification"><p>{rfa.JUSTIFICATION || '—'}</p></DocumentSection>
+      {/* Older RFAs kept a separate Justification; new ones write it in Purpose and Justification. */}
+      {rfa.JUSTIFICATION ? <DocumentSection title="Justification"><p>{rfa.JUSTIFICATION}</p></DocumentSection> : null}
 
       <DocumentSection title="Picture / Letter Attachment">
         <div className="attachments">

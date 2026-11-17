@@ -88,7 +88,7 @@ insert('APPROVAL_MATRIX', { MATRIX_ID: 'm_leftover', DEPARTMENT_ID: 'deleted_dep
 
 const user = (id: string) => all<UserRecord>('USERS').find((u) => u.USER_ID === id) as unknown as SessionUser;
 const withDept = (id: string) => ({ ...user(id), DEPARTMENT_NAME: all<{ DEPARTMENT_ID: string; DEPARTMENT_NAME: string }>('DEPARTMENTS').find((d) => d.DEPARTMENT_ID === user(id).DEPARTMENT_ID)?.DEPARTMENT_NAME || '' }) as SessionUser;
-const form = (title: string, amount: number, over: Record<string, unknown> = {}) => ({ requestTitle: title, purpose: `Purpose of ${title.toLowerCase()} for the school.`, budgetAllocation: amount, targetDate: '2027-01-15', justification: 'Needed to support classes and operations this school year.', requestedAmount: String(amount), expenseClassification: 'OPEX', purchaseRequest: false, involvedDepartmentIds: [], recommendingAlternateUserId: '', includePrincipal: false, includeProcurement: false, ...over });
+const form = (title: string, amount: number, over: Record<string, unknown> = {}) => ({ requestTitle: title, purpose: `Purpose of ${title.toLowerCase()} for the school. Needed to support classes and operations this school year.`, budgetAllocation: amount, targetDate: '2027-01-15', requestedAmount: String(amount), expenseClassification: 'OPEX', purchaseRequest: false, involvedDepartmentIds: [], recommendingAlternateUserId: '', includePrincipal: false, includeProcurement: false, ...over });
 const approve = (rfaId: string, ids: string[]) => ids.forEach((id) => decideRfa(withDept(id), rfaId, 'APPROVED', ''));
 
 createRfa(withDept('staff'), form('Printer toner for the IT Office', 4500));                       // draft

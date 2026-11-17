@@ -78,8 +78,8 @@ export function RfaFormPage() {
       const involvedIds = (rfa.INVOLVED_DEPARTMENT_IDS || '').split(',').map((s) => s.trim()).filter(Boolean);
       if (!involvedIds.length && rfa.INVOLVED_DEPARTMENT_ID) involvedIds.push(rfa.INVOLVED_DEPARTMENT_ID);
       setForm({
-        requestTitle: rfa.REQUEST_TITLE, purpose: rfa.PURPOSE, budgetAllocation: String(rfa.BUDGET_ALLOCATION || ''),
-        targetDate: dateInputValue(rfa.TARGET_DATE), justification: rfa.JUSTIFICATION,
+        requestTitle: rfa.REQUEST_TITLE, purpose: [rfa.PURPOSE, rfa.JUSTIFICATION].map((part) => String(part || '').trim()).filter(Boolean).join('\n\n'), budgetAllocation: String(rfa.BUDGET_ALLOCATION || ''),
+        targetDate: dateInputValue(rfa.TARGET_DATE), justification: '',
         fiscalYear: rfa.FISCAL_YEAR || String(currentSchoolYear()), requestedAmount: requested,
         expenseClassification: rfa.EXPENSE_CLASSIFICATION || '',
         purchaseRequest: Boolean(rfa.PURCHASE_REQUEST ?? financial?.purchaseRequest),
@@ -242,8 +242,8 @@ export function RfaFormPage() {
           <div><h2>Purpose and justification</h2><p>Explain what is requested, why it is needed, and when it is targeted.</p></div>
         </div>
         <label className="field full">
-          <span>Purpose <b>*</b></span>
-          <textarea required minLength={10} rows={5} value={form.purpose} onChange={(e) => set('purpose', e.target.value)} placeholder="Describe the intended purpose and expected outcome" />
+          <span>Purpose and Justification <b>*</b></span>
+          <textarea required minLength={10} rows={7} value={form.purpose} onChange={(e) => set('purpose', e.target.value)} placeholder="Describe what is requested, why it is needed, and the expected outcome" />
         </label>
         <div className="form-grid">
           {usesLegacyWorkflow && <label className="field">
@@ -255,10 +255,6 @@ export function RfaFormPage() {
             <input required type="date" value={form.targetDate} onChange={(e) => set('targetDate', e.target.value)} />
           </label>
         </div>
-        <label className="field full">
-          <span>Justification <b>*</b></span>
-          <textarea required minLength={10} rows={7} value={form.justification} onChange={(e) => set('justification', e.target.value)} placeholder="Provide the business or institutional justification" />
-        </label>
       </section>
 
       <section className="form-card">

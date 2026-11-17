@@ -41,6 +41,11 @@ describe('eRFA workflow core', () => {
     expect(() => validateRfaInput({ requestTitle: '', purpose: '', targetDate: '' }, true)).toThrow();
   });
 
+  it('needs only one Purpose and Justification text; a separate justification is optional', () => {
+    expect(() => validateRfaInput({ requestTitle: 'Lab equipment', purpose: 'Replace broken equipment because classes need it', budgetAllocation: 1000, targetDate: '2026-09-01' }, true)).not.toThrow();
+    expect(() => validateRfaInput({ requestTitle: 'Lab equipment', purpose: 'Too short', budgetAllocation: 1000, targetDate: '2026-09-01' }, true)).toThrow('Purpose and Justification must contain at least 10 characters.');
+  });
+
   it('preserves an ISO target date through a Sheets timestamp round-trip', () => {
     expect(canonicalIsoDate('2026-09-10T00:00:00.000Z')).toBe('2026-09-10');
     expect(validateRfaInput({ requestTitle: 'Lab equipment', purpose: 'Replace broken equipment', budgetAllocation: 1000, targetDate: '2026-09-10T00:00:00.000Z', justification: 'Required for safe classes' }, true).targetDate).toBe('2026-09-10');

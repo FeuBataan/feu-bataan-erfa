@@ -133,10 +133,9 @@ export function validateRfaInput(payload: Record<string, unknown>, forSubmission
   };
   if (forSubmission) {
     if (clean.requestTitle.length < 3) throw new Error('Project / Activity / Request Title is required.');
-    if (clean.purpose.length < 10) throw new Error('Purpose must contain at least 10 characters.');
+    if (clean.purpose.length < 10) throw new Error('Purpose and Justification must contain at least 10 characters.');
     if (!Number.isFinite(clean.budgetAllocation) || clean.budgetAllocation < 0) throw new Error('Budget Allocation must be a valid non-negative amount.');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(clean.targetDate)) throw new Error('Target Date is required.');
-    if (clean.justification.length < 10) throw new Error('Justification must contain at least 10 characters.');
   }
   return clean;
 }
