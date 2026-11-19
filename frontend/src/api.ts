@@ -72,7 +72,8 @@ function forgetAfterChange(action: string, payload: Record<string, unknown>): vo
     let read = '';
     try { read = String((JSON.parse(key) as unknown[])[0]); } catch { read = ''; }
     if (LIST_READS.has(read) && Array.isArray(value)) {
-      if (read === 'rfa.forApproval' && DECISIONS.has(action)) lastGood.set(key, value.filter((row) => (row as { RFA_ID?: string })?.RFA_ID !== rfaId));
+      if (action === 'admin.rfa.delete') lastGood.set(key, value.filter((row) => (row as { RFA_ID?: string })?.RFA_ID !== rfaId));
+      else if (read === 'rfa.forApproval' && DECISIONS.has(action)) lastGood.set(key, value.filter((row) => (row as { RFA_ID?: string })?.RFA_ID !== rfaId));
       continue;
     }
     lastGood.delete(key);

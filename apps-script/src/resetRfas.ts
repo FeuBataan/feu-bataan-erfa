@@ -1,6 +1,7 @@
 import { SHEETS } from './constants';
 import { audit } from './audit';
 import { backupDatabase } from './backup';
+import { toBoolean } from './core';
 import { getDatabase, getSetting, resetPerRequestCache, setSetting } from './store';
 import type { SessionUser } from './types';
 
@@ -93,25 +94,99 @@ function trashAttachments(attachmentRows: Row[]): { files: number; folders: numb
 export function resetRfas(actor: Pick<SessionUser, 'FULL_NAME' | 'EMAIL'>): Record<string, unknown> {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(30000)) throw new Error('eRFA is busy. Try again in a minute.');
+  try { return resetRfasUnlocked(actor); }
+  finally { lock.releaseLock(); }
+}
+
+/** The reset itself; the caller holds the script lock (the web app's withLock or resetRfas). */
+export function resetRfasUnlocked(actor: Pick<SessionUser, 'FULL_NAME' | 'EMAIL'>): Record<string, unknown> {
+  const before = previewRfaReset();
+  const backup = backupBeforeReset();
+
+  const { headers: attachmentHeaders, values: attachmentValues } = sheetRows('RFA_ATTACHMENTS');
+  const attachmentRows = attachmentValues.map((row) => Object.fromEntries(attachmentHeaders.map((h, i) => [h, row[i]])));
+
+  const removed: RfaResetCounts = {};
+  CLEAR_ALL.forEach((name) => { removed[name] = keepOnly(name, () => false); });
+  CLEAR_RFA_LINKED.forEach((name) => { removed[name] = keepOnly(name, (headers, row) => !isRfaLinked(headers, row)); });
+  SpreadsheetApp.flush();
+
+  setSetting('LAST_RFA_SEQUENCE', '0', 'Internal numbering state');
+  const drive = trashAttachments(attachmentRows);
+  resetPerRequestCache();
+
+  audit('RFAS_RESET', actor, '', '', '', 'All RFAs cleared for a fresh start. Accounts and settings kept.', { removed, drive, backupId: backup.backupId });
+  return { before, removed, drive, backup, message: `Removed ${removed.RFA} RFAs. Accounts, departments, approval matrix and settings were kept. Backup: "${backup.backupName}".` };
+}
+
+const RFA_SHEETS: SheetName[] = ['RFA', 'RFA_APPROVALS', 'RFA_ATTACHMENTS', 'NOTIFICATIONS', 'RFA_AUDIT', 'BUDGET_TRANSACTIONS'];
+
+function requireAdmin(actor: SessionUser): void {
+  if (!toBoolean(actor.IS_ADMIN)) throw Object.assign(new Error('Only administrators can delete RFAs.'), { code: 'FORBIDDEN' });
+}
+
+/** Move one RFA's attachment files and its Drive folder (numbered or DRAFT-<id>) to the trash. */
+function trashRfaFiles(attachmentRows: Row[], folderNames: string[]): { files: number; folders: number } {
+  let files = 0;
+  let folders = 0;
+  attachmentRows.forEach((row) => {
+    const id = String(row.DRIVE_FILE_ID ?? '').trim();
+    if (!id) return;
+    try { DriveApp.getFileById(id).setTrashed(true); files += 1; } catch { /* already gone or no access */ }
+  });
+  const rootId = getSetting('ATTACHMENT_ROOT_FOLDER_ID');
+  if (!rootId) return { files, folders };
   try {
-    const before = previewRfaReset();
-    const backup = backupBeforeReset();
+    const years = DriveApp.getFolderById(rootId).getFolders();
+    while (years.hasNext()) {
+      const rfaFolders = years.next().getFolders();
+      while (rfaFolders.hasNext()) {
+        const folder = rfaFolders.next();
+        if (!folderNames.includes(folder.getName())) continue;
+        folder.setName(`${folder.getName()} (deleted)`);
+        folder.setTrashed(true);
+        folders += 1;
+      }
+    }
+  } catch { /* best-effort; the RFA's rows are already removed */ }
+  return { files, folders };
+}
 
-    const { headers: attachmentHeaders, values: attachmentValues } = sheetRows('RFA_ATTACHMENTS');
-    const attachmentRows = attachmentValues.map((row) => Object.fromEntries(attachmentHeaders.map((h, i) => [h, row[i]])));
+/**
+ * Administrators only: permanently remove one RFA and everything that belongs to it
+ * (approvals, attachments, notifications, its history rows, budget rows). Attachment files
+ * go to the Drive trash. One history row records who deleted which RFA. Its number is not reused.
+ */
+export function deleteRfa(actor: SessionUser, payload: Record<string, unknown>): Record<string, unknown> {
+  requireAdmin(actor);
+  const rfaId = String(payload.rfaId ?? '').trim();
+  if (!rfaId) throw new Error('Choose an RFA to delete.');
+  const { headers: rfaHeaders, values: rfaValues } = sheetRows('RFA');
+  const rfaRow = rfaValues.find((row) => String(row[rfaHeaders.indexOf('RFA_ID')]) === rfaId);
+  if (!rfaRow) throw Object.assign(new Error('RFA was not found. It may already be deleted or archived.'), { code: 'NOT_FOUND' });
+  const rfa = Object.fromEntries(rfaHeaders.map((h, i) => [h, rfaRow[i]])) as Row;
+  const number = String(rfa.RFA_NUMBER ?? '').trim();
+  const label = number || 'Draft';
 
-    const removed: RfaResetCounts = {};
-    CLEAR_ALL.forEach((name) => { removed[name] = keepOnly(name, () => false); });
-    CLEAR_RFA_LINKED.forEach((name) => { removed[name] = keepOnly(name, (headers, row) => !isRfaLinked(headers, row)); });
-    SpreadsheetApp.flush();
+  const { headers: attachmentHeaders, values: attachmentValues } = sheetRows('RFA_ATTACHMENTS');
+  const attachmentRows = attachmentValues
+    .filter((row) => String(row[attachmentHeaders.indexOf('RFA_ID')]) === rfaId)
+    .map((row) => Object.fromEntries(attachmentHeaders.map((h, i) => [h, row[i]])));
 
-    setSetting('LAST_RFA_SEQUENCE', '0', 'Internal numbering state');
-    const drive = trashAttachments(attachmentRows);
-    resetPerRequestCache();
+  const removed: RfaResetCounts = {};
+  RFA_SHEETS.forEach((name) => { removed[name] = keepOnly(name, (headers, row) => String(row[headers.indexOf('RFA_ID')] ?? '') !== rfaId); });
+  SpreadsheetApp.flush();
+  const drive = trashRfaFiles(attachmentRows, [number, `DRAFT-${rfaId}`].filter(Boolean));
+  resetPerRequestCache();
 
-    audit('RFAS_RESET', actor, '', '', '', 'All RFAs cleared for a fresh start. Accounts and settings kept.', { removed, drive, backupId: backup.backupId });
-    return { before, removed, drive, backup, message: `Removed ${removed.RFA} RFAs. Accounts, departments, approval matrix and settings were kept. Backup: "${backup.backupName}".` };
-  } finally {
-    lock.releaseLock();
-  }
+  audit('RFA_DELETED', actor, '', String(rfa.STATUS ?? ''), '', `${label} "${String(rfa.REQUEST_TITLE ?? '')}" by ${String(rfa.REQUESTED_BY ?? '')} was deleted.`, { rfaId, rfaNumber: number, removed, drive });
+  return { rfaId, rfaNumber: number, removed, drive, message: `${label} was deleted.` };
+}
+
+/** Administrators only: clear every RFA (keeps accounts and settings), after a backup copy. */
+export function resetAllRfasFromApp(actor: SessionUser, payload: Record<string, unknown>): Record<string, unknown> {
+  requireAdmin(actor);
+  if (payload.preview === true) return { before: previewRfaReset() };
+  if (String(payload.confirm ?? '').trim().toUpperCase() !== 'DELETE ALL') throw new Error('Type DELETE ALL to confirm.');
+  return resetRfasUnlocked(actor);
 }

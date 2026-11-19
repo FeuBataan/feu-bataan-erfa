@@ -950,3 +950,38 @@ td[data-label="RFA"], td[data-label="Date"], td[data-label="Date Filed"], td[dat
 
 /* Progress note while a decision is being saved */
 .notice.saving { display: flex; align-items: center; gap: .6rem; background: var(--tint); color: var(--brand); border: 1px solid var(--line); }
+
+/* For My Action: notes for decisions saving in the background */
+.decision-notes { display: grid; gap: .5rem; margin-bottom: 1rem; }
+.decision-note { align-items: center; margin-bottom: 0; animation: fade-in .15s ease-out; }
+.decision-note > span { flex: 1; }
+.decision-note .icon-button { min-width: 28px; min-height: 28px; padding: .2rem; color: inherit; }
+.decision-note.saving { background: var(--tint); color: var(--brand); border: 1px solid var(--line); }
+.decision-note.done { background: #ecfdf3; color: #18472a; border: 1px solid #b8e0c4; }
+.decision-note.failed { background: #fef3f2; color: #7a1e20; border: 1px solid #f0b4b8; }
+
+/* Snappier feel: instant press feedback, no tap delay on phones, quicker page and dialog entrances */
+html { touch-action: manipulation; }
+.button:active:not(:disabled), .row-link:active, .sidebar-nav a:active, .mobile-nav a:active { transform: scale(.97); }
+.button { transition: background .12s, border-color .12s, color .12s, box-shadow .12s, transform .06s; }
+.page > * { animation-duration: .12s; }
+@keyframes page-in { from { opacity: .4; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+.dialog-backdrop { animation-duration: .1s; }
+.dialog { animation-duration: .12s; }
+@media (prefers-reduced-motion: reduce) { .decision-note { animation: none; } .button:active:not(:disabled), .row-link:active, .sidebar-nav a:active, .mobile-nav a:active { transform: none; } }
+
+/* Attachment viewer: PDFs and pictures open inside eRFA, full screen on phones */
+.attachments .attachment-view { display: inline-flex; flex-direction: row; flex: 0 0 auto; align-items: center; gap: .3rem; margin-left: auto; color: var(--blue); font-weight: 650; font-size: var(--text-sm); white-space: nowrap; }
+.attachment-viewer { position: fixed; inset: 0; z-index: 300; display: flex; flex-direction: column; background: rgba(12,22,38,.92); animation: fade-in .1s ease-out; }
+.attachment-viewer > header { display: flex; align-items: center; gap: .6rem; padding: .6rem .8rem; background: #fff; border-bottom: 1px solid var(--line); }
+.attachment-viewer > header b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-sm); }
+.attachment-viewer-body { flex: 1; overflow: auto; padding: 1rem; display: flex; flex-direction: column; align-items: center; gap: 1rem; -webkit-overflow-scrolling: touch; }
+.attachment-viewer-pages { width: 100%; max-width: 900px; display: flex; flex-direction: column; align-items: center; gap: .75rem; }
+.attachment-viewer-pages canvas { display: block; max-width: 100%; height: auto; background: #fff; box-shadow: 0 6px 18px rgba(0,0,0,.35); }
+.attachment-viewer-body img { display: block; max-width: min(100%, 1100px); height: auto; background: #fff; box-shadow: 0 6px 18px rgba(0,0,0,.35); }
+.attachment-viewer-loading { display: flex; align-items: center; gap: .6rem; color: #fff; padding: 2rem; }
+.attachment-viewer .notice { max-width: 600px; }
+@media (max-width: 640px) { .attachment-viewer-body { padding: .5rem; } .attachment-viewer > header .button { padding: .5rem .7rem; } }
+@media (prefers-reduced-motion: reduce) { .attachment-viewer { animation: none; } }
+@media print { .attachment-viewer { display: none !important; } }
+.attachments .attachment-view svg { color: inherit !important; width: 16px; }

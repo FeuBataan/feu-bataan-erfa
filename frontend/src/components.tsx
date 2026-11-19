@@ -1,10 +1,13 @@
 import { AlertTriangle, BarChart3, Files, CheckCircle2, FilePlus2, FileText, Home, ListTodo, LoaderCircle, LogOut, Settings2, ShieldCheck, Wallet, X } from 'lucide-react';
 import { Component, Suspense, useEffect, useState, type ErrorInfo, type ReactNode } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
+import { createPortal } from 'react-dom';
 import { api, onDataChanged, prefetch } from './api';
 import { useAuth } from './auth';
 import { GoogleSignInButton } from './googleSignIn';
 import { statusLabel } from './format';
+import { useAppUpdates } from './updates';
+import { hiddenFromQueue, onDecisionsChanged } from './decisions';
 import type { Rfa, RfaStatus } from './types';
 
 export function Spinner({ label = 'Loading' }: { label?: string }) {
@@ -41,7 +44,8 @@ function usePendingCount(enabled: boolean, pathname: string): number {
     let alive = true;
     const load = () => {
       if (document.visibilityState === 'hidden') return;
-      api<Rfa[]>('rfa.forApproval').then((rows) => { if (alive) setCount(Array.isArray(rows) ? rows.length : 0); }).catch(() => undefined);
+      const startedAt = Date.now();
+      api<Rfa[]>('rfa.forApproval').then((rows) => { if (alive) setCount(Array.isArray(rows) ? rows.filter((row) => !hiddenFromQueue(row.RFA_ID, startedAt)).length : 0); }).catch(() => undefined);
     };
     load();
     const timer = window.setInterval(load, PENDING_REFRESH_MS);
@@ -49,7 +53,9 @@ function usePendingCount(enabled: boolean, pathname: string): number {
     document.addEventListener('visibilitychange', onVisible);
     window.addEventListener('focus', onVisible);
     const stopListening = onDataChanged(load);
-    return () => { alive = false; window.clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); window.removeEventListener('focus', onVisible); stopListening(); };
+    // A decision that failed puts its RFA back in the queue, so count again.
+    const stopDecisions = onDecisionsChanged(load);
+    return () => { alive = false; window.clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); window.removeEventListener('focus', onVisible); stopListening(); stopDecisions(); };
   }, [enabled, pathname]);
   return count;
 }
@@ -104,12 +110,14 @@ export function SuccessNotice({ message }: { message: string }) {
 }
 
 export function Dialog({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
-  return <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
+  const dialog = <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
     <section className="dialog" role="dialog" aria-modal="true" aria-label={title}>
       <header><h2>{title}</h2><button className="icon-button" onClick={onClose} aria-label="Close"><X /></button></header>
       {children}
     </section>
   </div>;
+  // Drawn at the top of the page so no card or animated panel around it can clip or offset it.
+  return typeof document === 'undefined' ? dialog : createPortal(dialog, document.body);
 }
 
 /** Lists usually opened next; must match the payloads RfaListPage asks for. */
@@ -162,6 +170,7 @@ export function Layout() {
   const pending = usePendingCount(Boolean(user?.CAN_APPROVE_RFA), pathname);
   const [adminMenuOpen, setAdminMenuOpen] = useState(false);
   useWarmUp(user);
+  useAppUpdates(pathname);
   // Each page opens at the top instead of keeping the previous page's scroll position.
   useEffect(() => { setAdminMenuOpen(false); window.scrollTo(0, 0); }, [pathname]);
   useEffect(() => {

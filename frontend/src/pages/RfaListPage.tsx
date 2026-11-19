@@ -1,6 +1,8 @@
-import { Search } from 'lucide-react';
+import { CheckCircle2, LoaderCircle, Search, X } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { useEffect, useRef, useState } from 'react';
-import { api, peek } from '../api';
+import { api, onDataChanged, peek } from '../api';
+import { decisionText, dismissDecision, hiddenFromQueue, useDecisions } from '../decisions';
 import { useAuth } from '../auth';
 import { ErrorNotice } from '../components';
 import type { ArchiveYear, Rfa } from '../types';
@@ -32,6 +34,13 @@ export function RfaListPage({ mode = 'mine' }: { mode?: ListMode }) {
   const [loading, setLoading] = useState(() => !peek<Rfa[]>(action, emptyFilters));
   const [error, setError] = useState('');
   const previousQuery = useRef(query);
+  // When the list on screen was loaded, so an RFA decided after that stays hidden until a fresh copy arrives.
+  const [loadedAt, setLoadedAt] = useState(0);
+  const [refreshTick, setRefreshTick] = useState(0);
+  const decisions = useDecisions();
+
+  // In For My Action, reload the queue after any saved change (such as a decision just recorded).
+  useEffect(() => (approvalsOnly ? onDataChanged(() => setRefreshTick((tick) => tick + 1)) : undefined), [approvalsOnly]);
 
   useEffect(() => {
     let current = true;
@@ -42,13 +51,14 @@ export function RfaListPage({ mode = 'mine' }: { mode?: ListMode }) {
     if (known) setRfas(known);
     setLoading(true);
     const timer = setTimeout(() => {
+      const startedAt = Date.now();
       void api<Rfa[]>(action, payload)
-        .then((next) => { if (current) { setRfas(next); setError(''); } })
+        .then((next) => { if (current) { setRfas(next); setLoadedAt(startedAt); setError(''); } })
         .catch((caught: Error) => { if (current) setError(caught.message); })
         .finally(() => { if (current) setLoading(false); });
     }, delay);
     return () => { current = false; clearTimeout(timer); };
-  }, [query, status, expenseClassification, fiscalYear, schoolYear, approvalsOnly, action]);
+  }, [query, status, expenseClassification, fiscalYear, schoolYear, approvalsOnly, action, refreshTick]);
 
   // Past school years that were archived; loaded once and cached for the visit.
   useEffect(() => {
@@ -57,6 +67,8 @@ export function RfaListPage({ mode = 'mine' }: { mode?: ListMode }) {
     api<ArchiveYear[]>('rfa.archives').then((rows) => { if (current) setArchives(Array.isArray(rows) ? rows : []); }).catch(() => undefined);
     return () => { current = false; };
   }, [approvalsOnly]);
+
+  const shown = approvalsOnly ? rfas.filter((rfa) => !hiddenFromQueue(rfa.RFA_ID, loadedAt)) : rfas;
 
   return <>
     <header className="page-header">
@@ -67,6 +79,7 @@ export function RfaListPage({ mode = 'mine' }: { mode?: ListMode }) {
       </div>
     </header>
     <ErrorNotice message={error} />
+    {approvalsOnly && <DecisionNotes items={decisions} />}
     {!approvalsOnly && <div className={`filters${archives.length ? ' with-year' : ''}`}>
       {archives.length > 0 && <label>
         <span className="sr-only">School year</span>
@@ -99,14 +112,34 @@ export function RfaListPage({ mode = 'mine' }: { mode?: ListMode }) {
         <input value={fiscalYear} onChange={(e) => setFiscalYear(e.target.value)} placeholder="Year, e.g. 2026" inputMode="numeric" aria-label="Fiscal year" />
       </label>
     </div>}
-    <section className={`panel flush${loading && rfas.length ? ' is-refreshing' : ''}`} aria-busy={loading}>
+    <section className={`panel flush${loading && shown.length && !approvalsOnly ? ' is-refreshing' : ''}`} aria-busy={loading}>
       {loading && !rfas.length
         ? <ListSkeleton />
-        : rfas.length
-          ? <RfaTable rfas={rfas} review={approvalsOnly} schoolYear={schoolYear} />
+        : shown.length
+          ? <RfaTable rfas={shown} review={approvalsOnly} schoolYear={schoolYear} />
           : <Empty title={copy.empty} text={copy.emptyText} />}
     </section>
   </>;
+}
+
+/** What happened to the decisions just made: saving, done, or what went wrong. */
+function DecisionNotes({ items }: { items: ReturnType<typeof useDecisions> }) {
+  // Finished notes clear themselves after a few seconds; failures stay until dismissed or reopened.
+  useEffect(() => {
+    const done = items.filter((item) => item.state === 'done');
+    if (!done.length) return undefined;
+    const timer = window.setTimeout(() => done.forEach((item) => dismissDecision(item.rfaId)), 6000);
+    return () => window.clearTimeout(timer);
+  }, [items]);
+  if (!items.length) return null;
+  return <div className="decision-notes">
+    {items.map((item) => <div key={item.rfaId} className={`notice decision-note ${item.state}`} role={item.state === 'failed' ? 'alert' : 'status'}>
+      {item.state === 'saving' ? <LoaderCircle size={18} className="spin" /> : item.state === 'done' ? <CheckCircle2 size={18} /> : null}
+      <span>{decisionText(item)}</span>
+      {item.state === 'failed' && <Link className="row-link" to={`/rfa/${item.rfaId}`}>Open it again</Link>}
+      {item.state !== 'saving' && <button className="icon-button" onClick={() => dismissDecision(item.rfaId)} aria-label="Dismiss"><X size={16} /></button>}
+    </div>)}
+  </div>;
 }
 
 function ListSkeleton() {

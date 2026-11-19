@@ -77,7 +77,7 @@ export function AdminPage() {
         <MatrixTable matrix={data.matrix} users={data.users} departments={data.departments} edit={setEditing} onChanged={(message) => { setSuccess(message); load(); }} onError={setError} />
         <ApprovalSettingsPanel data={data} onSaved={() => { setSuccess('Approval settings saved.'); load(); }} onError={setError} />
       </>}
-      {tab === 'logs' && <><MaintenancePanel /><Logs data={data} /></>}
+      {tab === 'logs' && <><MaintenancePanel /><ClearAllRfasPanel /><Logs data={data} /></>}
     </section>
 
     {editing && <Dialog
@@ -289,6 +289,47 @@ function MaintenancePanel() {
         <td>{backup.url ? <a className="row-link" href={backup.url} target="_blank" rel="noreferrer">Open in Drive</a> : '—'}</td>
       </tr>)}</tbody>
     </table></div>}
+  </section>;
+}
+
+/** Administrators only: clear every RFA after testing, keeping accounts and settings. */
+function ClearAllRfasPanel() {
+  const [open, setOpen] = useState(false);
+  const [counts, setCounts] = useState<Record<string, number> | null>(null);
+  const [confirm, setConfirm] = useState('');
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState('');
+  const [done, setDone] = useState('');
+  async function start() {
+    setError(''); setDone(''); setConfirm(''); setCounts(null); setOpen(true);
+    try { setCounts((await api<{ before: Record<string, number> }>('admin.rfa.resetAll', { preview: true })).before); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : 'Could not count the RFAs.'); setOpen(false); }
+  }
+  async function clearAll() {
+    setWorking(true); setError('');
+    try { const result = await api<{ message: string }>('admin.rfa.resetAll', { confirm }); setDone(result.message); setOpen(false); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : 'The RFAs could not be cleared.'); }
+    finally { setWorking(false); }
+  }
+  return <section className="form-card maintenance-panel">
+    <div className="maintenance-head">
+      <div><h3>Clear all RFAs</h3><p className="muted">For a fresh start after testing. Removes every RFA with its approvals, attachments and history, and numbering starts again at 0001. Users, departments, heads, approval roles and settings are kept. A backup copy of the database is saved first.</p></div>
+      <button className="button danger-outline" onClick={() => void start()}>Clear all RFAs…</button>
+    </div>
+    <ErrorNotice message={error} />
+    <SuccessNotice message={done} />
+    {open && <Dialog title="Clear every RFA?" onClose={() => setOpen(false)}>
+      <div className="dialog-body"><div>
+        {!counts ? <Spinner label="Counting RFAs" /> : <>
+          <p>This removes <b>{counts.RFA ?? 0}</b> RFAs for everyone, with {counts.RFA_APPROVALS ?? 0} approval rows, {counts.RFA_ATTACHMENTS ?? 0} attachments and {counts.RFA_AUDIT ?? 0} history rows. Attachments go to the Drive trash. A backup copy is saved first.</p>
+          <label className="field"><span>Type <b>DELETE ALL</b> to confirm</span><input value={confirm} onChange={(e) => setConfirm(e.target.value)} autoFocus autoComplete="off" /></label>
+          <div className="dialog-actions">
+            <button className="button ghost" onClick={() => setOpen(false)}>Keep them</button>
+            <button className="button danger" disabled={working || confirm.trim().toUpperCase() !== 'DELETE ALL'} onClick={() => void clearAll()}>{working ? 'Clearing…' : 'Clear all RFAs'}</button>
+          </div>
+        </>}
+      </div></div>
+    </Dialog>}
   </section>;
 }
 

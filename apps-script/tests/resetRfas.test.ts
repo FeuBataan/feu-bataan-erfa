@@ -95,4 +95,39 @@ describe('resetRfas', () => {
     expect(trashedFolders).toEqual(['RFA-2026-0001 (pilot, removed)']);
     expect(auditCalls[0][0]).toBe('RFAS_RESET');
   });
+
+  const admin = { USER_ID: 'u1', FULL_NAME: 'Admin', EMAIL: 'admin@x.edu', IS_ADMIN: true } as never;
+  const staff = { USER_ID: 'u2', FULL_NAME: 'Staff', EMAIL: 'vp@other.edu', IS_ADMIN: false } as never;
+
+  it('deletes one RFA and everything linked to it, leaving other RFAs and numbering alone', async () => {
+    const { deleteRfa } = await import('../src/resetRfas');
+    const result = deleteRfa(admin, { rfaId: 'r1' }) as { rfaNumber: string };
+    expect(result.rfaNumber).toBe('RFA-2026-0001');
+    expect(live('RFA').map((r) => r[0])).toEqual(['r2']);
+    ['RFA_APPROVALS', 'RFA_ATTACHMENTS', 'NOTIFICATIONS'].forEach((name) => expect(live(name)).toHaveLength(0));
+    expect(live('RFA_AUDIT').map((r) => r[0])).toEqual(['l2']);
+    expect(live('BUDGET_TRANSACTIONS').map((r) => r[0])).toEqual(['t2']);
+    expect(settings.get('LAST_RFA_SEQUENCE')).toBe('2');
+    expect(trashedFiles).toEqual(['drive1']);
+    expect(trashedFolders).toEqual(['RFA-2026-0001 (deleted)']);
+    expect(auditCalls[0][0]).toBe('RFA_DELETED');
+    expect(auditCalls[0][2]).toBe('');
+  });
+
+  it('lets only administrators delete, and reports a missing RFA', async () => {
+    const { deleteRfa } = await import('../src/resetRfas');
+    expect(() => deleteRfa(staff, { rfaId: 'r1' })).toThrow('Only administrators');
+    expect(() => deleteRfa(admin, { rfaId: 'nope' })).toThrow('not found');
+    expect(live('RFA')).toHaveLength(2);
+  });
+
+  it('clears all from the app only for an administrator who typed DELETE ALL', async () => {
+    const { resetAllRfasFromApp } = await import('../src/resetRfas');
+    expect(() => resetAllRfasFromApp(staff, { confirm: 'DELETE ALL' })).toThrow('Only administrators');
+    expect(() => resetAllRfasFromApp(admin, { confirm: 'delete' })).toThrow('DELETE ALL');
+    expect((resetAllRfasFromApp(admin, { preview: true }) as { before: { RFA: number } }).before.RFA).toBe(2);
+    expect(live('RFA')).toHaveLength(2);
+    resetAllRfasFromApp(admin, { confirm: 'delete all' });
+    expect(live('RFA')).toHaveLength(0);
+  });
 });

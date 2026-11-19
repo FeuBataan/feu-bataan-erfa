@@ -1,7 +1,9 @@
-import { ArrowLeft, Check, Download, Edit3, FileText, LoaderCircle, Printer, RotateCcw, Send, XCircle } from 'lucide-react';
+import { ArrowLeft, Check, Download, Edit3, Eye, FileText, LoaderCircle, Printer, RotateCcw, Send, Trash2, XCircle } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api, peek } from '../api';
+import { AttachmentViewer, fetchAttachment, saveBlob, viewKind } from './AttachmentViewer';
+import { dismissDecision, failedDecision, startDecision } from '../decisions';
 import { useAuth } from '../auth';
 import { Dialog, ErrorNotice, Spinner, StatusBadge, SuccessNotice } from '../components';
 import { date, dateTime, displayName, expenseClassificationLabel, money, rfaNumberLabel, schoolYearLabel, stepLabel } from '../format';
@@ -25,6 +27,7 @@ function savePdf(rfa: Rfa) {
 
 export function RfaDetailPage() {
   const { id = '' } = useParams();
+  const { user } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const schoolYear = Number(searchParams.get('sy') || 0);
@@ -37,6 +40,9 @@ export function RfaDetailPage() {
   const [dialog, setDialog] = useState<'approve'|'return'|'disapprove'|null>(null);
   const [remarks, setRemarks] = useState('');
   const [working, setWorking] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [viewing, setViewing] = useState<Attachment | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState('');
 
   const load = useCallback(() => {
     setLoading(true);
@@ -48,26 +54,25 @@ export function RfaDetailPage() {
 
   useEffect(load, [load]);
 
-  // The dialog closes as soon as the decision is confirmed and a progress note shows while it
-  // saves; if saving fails, the dialog reopens with the remarks kept.
-  async function decide() {
-    if (!dialog) return;
+  // A decision saves in the background: the approver goes straight back to For My Action,
+  // which shows it being recorded. If it fails, this page offers it again with the remarks kept.
+  function decide() {
+    if (!dialog || !detail) return;
     const action = dialog;
+    const label = detail.rfa.RFA_NUMBER ? rfaNumberLabel(detail.rfa.RFA_NUMBER) : (detail.rfa.REQUEST_TITLE || 'the RFA');
     setDialog(null);
-    setWorking(true);
-    setError('');
-    setSuccess('');
-    setPending(action === 'approve' ? 'Recording your approval…' : action === 'return' ? 'Returning the RFA for revision…' : 'Recording the disapproval…');
-    try {
-      await api(`rfa.${action}`, { rfaId: id, remarks });
-      setRemarks('');
-      setSuccess(action === 'approve' ? 'Approval recorded and the workflow advanced.' : `RFA ${action === 'return' ? 'returned for revision' : 'disapproved'}.`);
-      load();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'The action failed.');
-      setDialog(action);
-    } finally { setWorking(false); setPending(''); }
+    void startDecision(id, label, action, remarks).catch(() => undefined);
+    setRemarks('');
+    navigate('/approvals');
   }
+
+  useEffect(() => {
+    const failed = failedDecision(id);
+    if (!failed) return;
+    setError(`Your decision was not saved: ${failed.error ?? 'please try again.'}`);
+    setRemarks(failed.remarks);
+    dismissDecision(id);
+  }, [id]);
 
   async function transition(action: 'implementation'|'close') {
     setWorking(true);
@@ -76,23 +81,31 @@ export function RfaDetailPage() {
     finally { setWorking(false); }
   }
 
-  async function download(attachment: Attachment) {
+  // Administrators only: permanently remove this RFA (used to clear test requests).
+  async function deleteThis() {
+    setWorking(true);
+    setError('');
+    setPending('Deleting the RFA…');
     try {
-      const file = await api<{ fileName: string; mimeType: string; base64: string }>('attachment.download', { attachmentId: attachment.ATTACHMENT_ID });
-      const bytes = Uint8Array.from(atob(file.base64), (char) => char.charCodeAt(0));
-      const url = URL.createObjectURL(new Blob([bytes], { type: file.mimeType }));
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = file.fileName;
-      anchor.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Attachment download failed.'); }
+      await api('admin.rfa.delete', { rfaId: id });
+      setDeleting(false);
+      navigate(-1);
+    } catch (caught) { setError(caught instanceof Error ? caught.message : 'The RFA could not be deleted.'); }
+    finally { setWorking(false); setPending(''); }
+  }
+
+  // PDFs and pictures open in eRFA's viewer; other files (Word) download.
+  async function openAttachment(attachment: Attachment) {
+    if (viewKind(attachment) !== 'other') { setViewing(attachment); return; }
+    try { const file = await fetchAttachment(attachment); saveBlob(file.blob, file.fileName); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : 'Attachment download failed.'); }
   }
 
   if (loading && !detail) return <Spinner label="Loading RFA" />;
   if (!detail) return <><ErrorNotice message={error || 'RFA was not found.'} /><button className="button secondary" onClick={() => navigate('/rfas')}>Back to My RFAs</button></>;
 
   const { rfa, approvals, attachments, audit, permissions, financial, notedByNotApplicable, approvedByOrder = {} } = detail;
+  const deleteWord = rfa.RFA_NUMBER ? String(rfa.RFA_NUMBER) : 'DELETE';
   const approvedByWaitingMap = rfa.CURRENT_STEP === 'APPROVED_BY' ? approvedByWaiting(rfa, approvals, approvedByOrder) : new Map<string, string>();
   const isLegacyAssignment = rfa.CURRENT_MATRIX_ID === 'RFA_ASSIGNMENTS_V1';
   const isOfficialWorkflow = rfa.CURRENT_MATRIX_ID === 'RFA_FIXED_V3' || approvals.some((a) => a.STEP === 'REVIEWED_AND_NOTED');
@@ -121,6 +134,7 @@ export function RfaDetailPage() {
         <div className="header-actions">
           {pdfStatuses.has(rfa.STATUS) && <button className="button secondary" onClick={() => savePdf(rfa)}><Printer size={16} /> Download PDF</button>}
           {permissions.canEdit && <Link className="button secondary" to={`/rfa/${rfa.RFA_ID}/edit`}><Edit3 size={16} /> Edit</Link>}
+          {user?.IS_ADMIN && !detail.archived && <button className="button danger-outline" disabled={working} onClick={() => { setDeleteConfirm(''); setDeleting(true); }}><Trash2 size={16} /> Delete</button>}
         </div>
       </header>
       <ErrorNotice message={error} />
@@ -179,13 +193,13 @@ export function RfaDetailPage() {
 
       <DocumentSection title="Picture / Letter Attachment">
         <div className="attachments">
-          {attachments.length ? attachments.map((attachment) => <button key={attachment.ATTACHMENT_ID} onClick={() => void download(attachment)}>
+          {attachments.length ? attachments.map((attachment) => <button key={attachment.ATTACHMENT_ID} onClick={() => void openAttachment(attachment)} title={viewKind(attachment) === 'other' ? 'Download' : 'View'}>
             <FileText />
             <span>
               <b>{attachment.FILE_NAME}</b>
               <small>{(Number(attachment.SIZE_BYTES) / 1024 / 1024).toFixed(2)} MB · uploaded {dateTime(attachment.UPLOADED_AT)}</small>
             </span>
-            <Download />
+            {viewKind(attachment) === 'other' ? <Download aria-label="Download" /> : <span className="attachment-view"><Eye size={16} /> View</span>}
           </button>) : <p>No attachment submitted.</p>}
         </div>
       </DocumentSection>
@@ -272,9 +286,26 @@ export function RfaDetailPage() {
           <button className="button ghost" onClick={() => setDialog(null)}>Cancel</button>
           <button className={`button ${dialog === 'disapprove' ? 'danger' : 'primary'}`}
             disabled={working || (dialog !== 'approve' && remarks.trim().length < 3)}
-            onClick={() => void decide()}>
+            onClick={decide}>
             {dialog === 'approve' ? 'Confirm Approval' : dialog === 'return' ? 'Return to Requester' : 'Confirm Disapproval'}
           </button>
+        </div>
+      </div></div>
+    </Dialog>}
+
+    {viewing && <AttachmentViewer attachment={viewing} onClose={() => setViewing(null)} />}
+
+    {deleting && <Dialog title="Delete this RFA permanently?" onClose={() => setDeleting(false)}>
+      <div className="dialog-body"><div>
+        <p>This removes <b>{rfaNumberLabel(rfa.RFA_NUMBER)}</b> “{rfa.REQUEST_TITLE || 'Untitled draft'}” for everyone: its approvals, history and email records. Attachments go to the Drive trash. This cannot be undone in eRFA.</p>
+        <p className="muted">Use this only for test or mistaken requests.</p>
+        <label className="field">
+          <span>Type <b>{deleteWord}</b> to confirm</span>
+          <input value={deleteConfirm} onChange={(e) => setDeleteConfirm(e.target.value)} autoFocus autoComplete="off" />
+        </label>
+        <div className="dialog-actions">
+          <button className="button ghost" onClick={() => setDeleting(false)}>Keep it</button>
+          <button className="button danger" disabled={working || deleteConfirm.trim().toUpperCase() !== deleteWord.toUpperCase()} onClick={() => void deleteThis()}><Trash2 size={15} /> Delete RFA</button>
         </div>
       </div></div>
     </Dialog>}
