@@ -156,7 +156,7 @@ export function RfaDetailPage() {
     <article className={`rfa-document${pdfStatuses.has(rfa.STATUS) ? '' : ' not-final'}${rfa.STATUS === 'CANCELLED' ? ' is-cancelled' : ''}`}>
       {rfa.STATUS === 'CANCELLED' && <div className="print-cancelled" aria-hidden="true">CANCELLED</div>}
       <header className="print-brand">
-        <img src={`${import.meta.env.BASE_URL}school-logo.svg`} alt="FEU Bataan Campus" />
+        <img src={`${import.meta.env.BASE_URL}school-logo.svg`} alt="UNC Bataan" />
         <div>
           <b>REQUEST FOR APPROVAL (RFA) FORM</b>
           <span>{rfaNumberLabel(rfa.RFA_NUMBER)}</span>

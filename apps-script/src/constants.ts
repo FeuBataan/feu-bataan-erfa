@@ -110,5 +110,5 @@ export const DEFAULT_SETTINGS = [
   ['PRESIDENT_EMAIL', '', 'Email of the President role (used only while that role is unassigned; follows Approval settings)']
 ] as const;
 
-// FEU Bataan accepts PDF attachments only (keeps Drive storage small and every file viewable in eRFA).
+// UNC Bataan accepts PDF attachments only (keeps Drive storage small and every file viewable in eRFA).
 export const ALLOWED_ATTACHMENT_TYPES = ['application/pdf'];

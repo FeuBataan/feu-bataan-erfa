@@ -1,6 +1,6 @@
-# eRFA - FEU Bataan Campus
+# eRFA - UNC Bataan
 
-Electronic Request for Approval system for FEU Bataan Campus. It preserves the supplied institutional RFA fields and approval terminology while adding authenticated routing, email notifications, Drive attachments, dashboards, print/PDF output, and append-only history.
+Electronic Request for Approval system for UNC Bataan. It preserves the supplied institutional RFA fields and approval terminology while adding authenticated routing, email notifications, Drive attachments, dashboards, print/PDF output, and append-only history.
 
 ## Architecture
 

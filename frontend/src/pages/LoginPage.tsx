@@ -29,7 +29,7 @@ export function LoginPage() {
   return <main className="login-page">
     <section className="login-card" aria-labelledby="login-title">
       <div className="login-content">
-        <img src={`${import.meta.env.BASE_URL}school-logo.svg`} alt="FEU Bataan Campus" className="login-logo" />
+        <img src={`${import.meta.env.BASE_URL}school-logo.svg`} alt="UNC Bataan" className="login-logo" />
         <div className="login-title">
           <span>INTERNAL CONTROLS INITIATIVE</span>
           <h1 id="login-title">Electronic Request<br />for Approval</h1>
@@ -46,7 +46,7 @@ export function LoginPage() {
     </section>
     <aside className="login-aside">
       <div className="login-aside-content">
-        <span>FEU BATAAN CAMPUS</span>
+        <span>UNC BATAAN</span>
         <b>Clear approvals. Complete accountability.</b>
         <p>Preserves the institutional RFA form with electronic routing, secure attachments, Outlook email notices, and append-only history.</p>
       </div>

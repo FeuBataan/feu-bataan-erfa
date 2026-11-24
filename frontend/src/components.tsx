@@ -185,7 +185,7 @@ export function Layout() {
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="sidebar-brand">
-        <img src={`${import.meta.env.BASE_URL}school-logo-light.svg`} alt="FEU Bataan Campus" />
+        <img src={`${import.meta.env.BASE_URL}school-logo-light.svg`} alt="UNC Bataan" />
       </div>
 
       <nav className="sidebar-nav" aria-label="Main navigation">
@@ -230,7 +230,7 @@ export function Layout() {
       <main className="page"><ErrorBoundary key={pathname}><Suspense fallback={<PageFallback />}><Outlet /></Suspense></ErrorBoundary></main>
 
       <footer className="site-footer">
-        <span>eRFA - FEU Bataan Campus</span>
+        <span>eRFA - UNC Bataan</span>
         <span>Approvals are recorded electronically with a complete audit trail.</span>
       </footer>
     </div>

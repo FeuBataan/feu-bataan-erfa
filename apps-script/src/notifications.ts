@@ -86,7 +86,7 @@ export function buildEmail(type: string, recipientName: string, rfa: RfaRecord, 
     'All approval decisions must be made in eRFA. Please do not reply to this email; it is an automated notification.',
     '',
     'Thank you,',
-    'eRFA - FEU Bataan Campus'
+    'eRFA - UNC Bataan'
   ];
   return { subject: `[eRFA] ${copy.subject(rfa)}`, body: lines.filter((line): line is string => line !== null).join('\n') };
 }

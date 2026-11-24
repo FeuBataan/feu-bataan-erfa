@@ -34,7 +34,7 @@ export function DepartmentExpenseReportPage() {
   function exportCsv() {
     if (!report) return;
     const lines: Array<Array<string | number>> = [
-      ['FEU Bataan Campus', 'Expense Monitoring — Filtered Records'],
+      ['UNC Bataan', 'Expense Monitoring — Filtered Records'],
       ['School Year', schoolYearLabel(report.fiscalYear)],
       ['Department', report.departments.find((item) => item.DEPARTMENT_ID === departmentId)?.DEPARTMENT_NAME || 'All departments'],
       ['Type', expenseClassification || 'All'], ['Status', status || 'Recorded only'],

@@ -20,7 +20,7 @@ describe('buildEmail', () => {
     expect(body).toContain('Requested Amount: PHP 1,000.00');
     expect(body).toContain(`Open the request in eRFA: ${link}`);
     expect(body).not.toContain('RECOMMENDING_APPROVAL');
-    expect(body).toContain('Thank you,\neRFA - FEU Bataan Campus');
+    expect(body).toContain('Thank you,\neRFA - UNC Bataan');
   });
 
   it('includes approver remarks when an RFA is returned', () => {

@@ -34,7 +34,7 @@ export function BudgetManagementPage() {
   function exportCsv() {
     if (!data) return;
     const lines: Array<Array<string | number>> = [
-      ['FEU Bataan Campus', 'Expense Monitoring — Department Totals'],
+      ['UNC Bataan', 'Expense Monitoring — Department Totals'],
       ['School Year', schoolYearLabel(data.fiscalYear)],
       ['Filters', `Department=${departmentId || 'All'} | Type=${expenseClassification || 'All'} | Status=${status || 'Recorded (Approved/Implementation/Closed)'} | Dates=${fromDate || 'Any'} to ${toDate || 'Any'}`],
       [],

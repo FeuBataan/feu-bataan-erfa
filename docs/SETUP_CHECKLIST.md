@@ -1,4 +1,4 @@
-# FEU Bataan eRFA — Setup Checklist
+# UNC Bataan eRFA — Setup Checklist
 
 Do these once, in order. About 1 hour in total. Each part says **who** does it.
 
@@ -65,7 +65,7 @@ Test-ApplicationAccessPolicy -Identity <any-other-staff>@uncbataan.edu.ph -AppId
 
 Use one campus-owned Google account (for example a new Gmail made for eRFA) with **2-Step Verification on** and a backup admin. This account owns the database and attachments.
 
-1. <https://script.google.com> → **New project** → name it `FEU Bataan eRFA`. Copy the **Script ID** from Project Settings and send it to the developer.
+1. <https://script.google.com> → **New project** → name it `UNC Bataan eRFA`. Copy the **Script ID** from Project Settings and send it to the developer.
 2. The developer uploads the code (`pnpm --filter @erfa/apps-script push`, with `apps-script/.clasp.json` holding the Script ID).
 3. In the editor, choose **`setupDatabase`** → **Run** and approve the permissions. The log shows the database spreadsheet link.
 4. **Deploy → New deployment → Web app**: *Execute as* **Me**, *Who has access* **Anyone**. Copy the `/exec` URL. Later updates: Manage deployments → Edit → New version, so the URL never changes.
@@ -106,7 +106,7 @@ function runBootstrap() {
 | `VITE_MS_CLIENT_ID` | Application (client) ID |
 | `VITE_MS_TENANT_ID` | Directory (tenant) ID |
 
-4. **Actions → Check and deploy FEU Bataan eRFA frontend → Run workflow**. When it finishes, open the website.
+4. **Actions → Check and deploy UNC Bataan eRFA frontend → Run workflow**. When it finishes, open the website.
 
 ## 5. First sign-in and staff — eRFA administrator
 

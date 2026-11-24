@@ -1,4 +1,4 @@
-name: Check and deploy FEU Bataan eRFA frontend
+name: Check and deploy UNC Bataan eRFA frontend
 
 on:
   push:
