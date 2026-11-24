@@ -1,8 +1,8 @@
 # Deployment
 
-## 1. Google Cloud OAuth client
+## 1. Microsoft Entra app registration
 
-Create a Web application OAuth 2.0 client in the institution's Google Cloud project. Add the exact GitHub Pages origin and any approved local development origin to authorized JavaScript origins. Record the public client ID; do not create or expose a client secret for this browser flow.
+Register a single-tenant app with a Single-page application redirect URI of `<site>/auth-redirect.html`, delegated `User.Read` (sign-in) and application `Mail.Send` (Outlook email) with admin consent, a client secret stored only in Apps Script Script Properties as `MS_CLIENT_SECRET`, and an Exchange application access policy that limits sending to the eRFA mailbox. Step-by-step: [SETUP_CHECKLIST.md](SETUP_CHECKLIST.md) part 1.
 
 ## 2. Apps Script and database
 
@@ -10,8 +10,8 @@ Run `pnpm install` and `pnpm --filter @erfa/apps-script build`. Create a standal
 
 1. Run `setupDatabase()` and grant the requested Sheets, Drive, Mail, and external-request scopes.
 2. Open the returned spreadsheet URL.
-3. Set `GOOGLE_CLIENT_ID` and `FRONTEND_URL`; optionally set `ALLOWED_DOMAIN`.
-4. Run `bootstrapAdmin('admin@feu.edu.ph', 'Administrator Name')` once (see [SETUP_CHECKLIST.md](SETUP_CHECKLIST.md) step 4).
+3. Set `MS_TENANT_ID`, `MS_CLIENT_ID`, `MAIL_SENDER` and `FRONTEND_URL`; `ALLOWED_DOMAIN` defaults to `uncbataan.edu.ph`.
+4. Run `bootstrapAdmin('admin@uncbataan.edu.ph', 'Administrator Name')` once (see [SETUP_CHECKLIST.md](SETUP_CHECKLIST.md) step 4).
 
 `setupDatabase()` can be rerun safely. It never clears rows; it stops on conflicting headers instead of guessing a migration.
 
@@ -22,7 +22,7 @@ Deploy as a Web App. Execute as the project owner so one institutional database,
 Set these GitHub repository variables:
 
 - `VITE_API_URL`: Apps Script `/exec` URL
-- `VITE_GOOGLE_CLIENT_ID`: the same OAuth web client ID
+- `VITE_MS_CLIENT_ID` and `VITE_MS_TENANT_ID`: the app registration's client ID and tenant ID
 - `VITE_BASE_PATH`: `/<repository-name>/` for project Pages or `/` for a custom/root site
 
 Enable Pages with **GitHub Actions** as the source. The included workflow installs, checks, builds, and publishes `frontend/dist`. The SPA uses hash routing so direct links survive GitHub Pages static hosting.
@@ -36,7 +36,7 @@ Sign in as the initial admin. Add real departments, then real users, then choose
 ## 5. Production checklist
 
 - Apps Script Web App audience restricted appropriately
-- OAuth JavaScript origin exactly matches Pages
+- The Entra SPA redirect URI exactly matches `<site>/auth-redirect.html`
 - no secrets or institutional data committed
 - `EMAIL_ENABLED=TRUE` and a real notification test is `SENT`
 - attachment root is institution-owned and private

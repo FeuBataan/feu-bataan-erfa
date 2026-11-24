@@ -64,6 +64,10 @@ function sendQueuedEmails() {
   return globalThis.__erfaEntrypoints.sendQueuedEmails();
 }
 
+function testOutlookEmail() {
+  return globalThis.__erfaEntrypoints.testOutlookEmail();
+}
+
 `;
 
 await mkdir('dist', { recursive: true });
@@ -82,7 +86,7 @@ await copyFile('appsscript.json', 'dist/appsscript.json');
 
 const bundle = await readFile('dist/Code.js', 'utf8');
 const iifeEnd = bundle.lastIndexOf('})();');
-const requiredEntrypoints = ['doGet', 'doPost', 'setupDatabase', 'bootstrapAdmin', 'cleanAllNow', 'previewRfaResetNow', 'resetAllRfasKeepAccounts', 'previewArchiveNow', 'archivePastSchoolYearsNow', 'installAutomaticMaintenance', 'backupNow', 'runMonthlyBackup', 'runYearlyArchive', 'runDailyFollowUps', 'sendQueuedEmails'];
+const requiredEntrypoints = ['doGet', 'doPost', 'setupDatabase', 'bootstrapAdmin', 'cleanAllNow', 'previewRfaResetNow', 'resetAllRfasKeepAccounts', 'previewArchiveNow', 'archivePastSchoolYearsNow', 'installAutomaticMaintenance', 'backupNow', 'runMonthlyBackup', 'runYearlyArchive', 'runDailyFollowUps', 'sendQueuedEmails', 'testOutlookEmail'];
 if (iifeEnd < 0 || requiredEntrypoints.some((name) => bundle.indexOf(`function ${name}(`, iifeEnd) < 0)) {
   throw new Error('Apps Script entry-point wrappers were not emitted at top level.');
 }

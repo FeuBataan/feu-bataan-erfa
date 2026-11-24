@@ -14,6 +14,8 @@ Sign in from the browser console on the demo site:
 sessionStorage.setItem('erfa_google_id_token', await (await fetch('http://localhost:8787/dev-token?email=admin@demo.edu')).text()); location.reload();
 ```
 
+Add `&provider=microsoft` to the dev-token URL to sign in through the Microsoft 365 path instead.
+
 Sample accounts: `admin@` (administrator), `staff@` (staff), `ithead@` (IT head), `reviewer@`, `finance@`, `vpadmin@`,
 `vpacademic@`, `president@`, `principal@` (Principal), `procurement@` (Procurement) — all `@demo.edu`.
 Emails are not sent; `http://localhost:8787/outbox` lists what would have been sent.

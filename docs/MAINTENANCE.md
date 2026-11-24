@@ -10,7 +10,8 @@ eRFA is built to keep working for many years with little upkeep. This page lists
 | Google Apps Script (V8 runtime) | Runs the backend (`apps-script/`) | Google announces runtime changes well in advance. |
 | Google Sheets and Drive | Store records and attachments | Stable. A full backup is one "Make a copy" of the database spreadsheet. |
 | Google Identity Services | "Sign in with Google" button | The only script loaded from Google at runtime. If Google replaces it, update `frontend/src/googleSignIn.tsx`, the one file that touches it. |
-| MailApp | Sends notification emails | Daily limit: about 1,500 recipients on Google Workspace. |
+| Outlook (Microsoft Graph) | Sends notification emails from `MAIL_SENDER` | Exchange Online allows 10,000 recipients a day per mailbox. The client secret expires every 24 months; renew it as in SETUP_CHECKLIST.md. |
+| MailApp | Backup route if Outlook fails | 100 recipients a day on a free Google account. |
 
 Everything else (React, router, icons, the Inter font) ships inside the website build, so the site does not depend on any other outside service.
 
@@ -29,7 +30,7 @@ Everything else (React, router, icons, the Inter font) ships inside the website 
 3. In the database spreadsheet, check the `NOTIFICATIONS` sheet for `FAILED` emails.
 4. Confirm the June archive ran (admins receive an email; the maintenance panel shows the last archive date).
 5. Check **Administration → Logs → Automatic maintenance** shows **On** with a recent backup.
-6. Confirm the Google Cloud OAuth consent screen is still **In production** and **External** (needed for approvers from other domains).
+6. Check the Microsoft Entra client secret expiry date (eRFA app → Certificates & secrets) and renew it before it runs out.
 
 ## Automatic maintenance (backups and yearly archive)
 

@@ -38,7 +38,7 @@ Real delivery attempts with recipient, type, subject, sent timestamp, status, er
 
 ### SETTINGS
 
-Configuration and internal numbering state. Required deployment values are `GOOGLE_CLIENT_ID` and `FRONTEND_URL`; `ALLOWED_DOMAIN` is optional. `ATTACHMENT_ROOT_FOLDER_ID` is created automatically. No secret belongs in this sheet or the frontend.
+Configuration and internal numbering state. Required deployment values are `MS_TENANT_ID`, `MS_CLIENT_ID` and `FRONTEND_URL`; `MAIL_SENDER` turns on Outlook email; `ALLOWED_DOMAIN` limits unregistered sign-ins. The Outlook client secret lives in Script Properties (`MS_CLIENT_SECRET`), never in this sheet. `ATTACHMENT_ROOT_FOLDER_ID` is created automatically. No secret belongs in this sheet or the frontend.
 # Budget extension
 
 See [Budget Management](BUDGET_MANAGEMENT.md) for the append-only Phase 9 sheets and financial lifecycle. Financial amount columns use integer centavos in Sheets; eRFA renders PHP values for users.

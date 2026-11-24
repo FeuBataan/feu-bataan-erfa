@@ -1,14 +1,15 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { api, ApiError, getToken, onSessionProblem, peekSession, setToken, tokenExpiresAt } from './api';
+import { api, ApiError, getToken, onSessionProblem, peekSession, setToken, setTokenRenewer, tokenExpiresAt } from './api';
+import { forgetMicrosoftSignIn, rememberSignedOut, renewMicrosoftToken } from './microsoftSignIn';
 import type { SessionUser } from './types';
 
 interface AuthContextValue {
   user: SessionUser | null;
   loading: boolean;
   error: string;
-  /** True when the Google sign-in expired mid-visit; the page stays open behind a sign-in prompt. */
+  /** True when the sign-in expired mid-visit; the page stays open behind a sign-in prompt. */
   sessionExpired: boolean;
-  acceptGoogleCredential: (token: string) => Promise<void>;
+  acceptCredential: (token: string) => Promise<void>;
   /** Re-sign-in from the expired-session prompt without reloading the current page. */
   renewCredential: (token: string) => Promise<void>;
   signOut: () => void;
@@ -42,14 +43,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Runs once on start; quiet when a remembered user is already shown.
   useEffect(() => { if (getToken()) void loadSession(Boolean(user)); }, [loadSession]);
 
-  const signOut = useCallback(() => { setToken(''); setUser(null); setError(''); setSessionExpired(false); }, []);
+  // Microsoft tokens last about an hour; renew them quietly before they run out.
+  useEffect(() => { setTokenRenewer(renewMicrosoftToken); return () => setTokenRenewer(null); }, []);
+
+  const signOut = useCallback(() => { rememberSignedOut(true); forgetMicrosoftSignIn(); setToken(''); setUser(null); setError(''); setSessionExpired(false); }, []);
 
   useEffect(() => onSessionProblem((problem, message) => {
     if (problem === 'expired') { setSessionExpired(true); return; }
     setToken(''); setUser(null); setSessionExpired(false); setError(message);
   }), []);
 
-  const acceptGoogleCredential = useCallback(async (token: string) => { setToken(token); await loadSession(); }, [loadSession]);
+  const acceptCredential = useCallback(async (token: string) => { setToken(token); await loadSession(); }, [loadSession]);
 
   const renewCredential = useCallback(async (token: string) => {
     const previousEmail = user?.EMAIL?.toLowerCase() ?? '';
@@ -66,7 +70,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [user?.EMAIL]);
 
-  const value = useMemo(() => ({ user, loading, error, sessionExpired, acceptGoogleCredential, renewCredential, signOut }), [user, loading, error, sessionExpired, acceptGoogleCredential, renewCredential, signOut]);
+  const value = useMemo(() => ({ user, loading, error, sessionExpired, acceptCredential, renewCredential, signOut }), [user, loading, error, sessionExpired, acceptCredential, renewCredential, signOut]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

@@ -173,3 +173,27 @@ export function isPdfUpload(fileName: string, mimeType: string, bytes: ArrayLike
   const signature = [0x25, 0x50, 0x44, 0x46]; // %PDF
   return bytes.length >= 4 && signature.every((byte, i) => (bytes[i] & 0xff) === byte);
 }
+
+/** True when the token was issued by Microsoft Entra ID (Microsoft 365 sign-in). */
+export function isMicrosoftToken(claims: Record<string, unknown>): boolean {
+  const issuer = String(claims.iss || '');
+  return issuer.startsWith('https://sts.windows.net/') || issuer.startsWith('https://login.microsoftonline.com/');
+}
+
+const GRAPH_AUDIENCES = ['https://graph.microsoft.com', 'https://graph.microsoft.com/', '00000003-0000-0000-c000-000000000000'];
+
+/**
+ * Checks a Microsoft Graph access token's claims against this school's Microsoft 365 tenant and
+ * the eRFA app registration. Returns '' when acceptable, otherwise the reason. Microsoft Graph
+ * itself checks the signature when the backend reads the user's profile with the token, so a
+ * changed token is refused there; these claims are trusted only after that call succeeds.
+ */
+export function microsoftTokenProblem(claims: Record<string, unknown>, tenantId: string, clientId: string, nowMs: number): string {
+  if (!isMicrosoftToken(claims)) return 'not a Microsoft sign-in';
+  if (!GRAPH_AUDIENCES.includes(String(claims.aud || ''))) return 'wrong audience';
+  if (String(claims.tid || '').toLowerCase() !== String(tenantId || '').trim().toLowerCase()) return 'account is from another organization';
+  const app = String(claims.appid || claims.azp || '').toLowerCase();
+  if (app !== String(clientId || '').trim().toLowerCase()) return 'token was issued to another app';
+  if (!(Number(claims.exp) * 1000 > nowMs)) return 'sign-in expired';
+  return '';
+}

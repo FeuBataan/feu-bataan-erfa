@@ -35,6 +35,9 @@ importers:
 
   frontend:
     dependencies:
+      '@azure/msal-browser':
+        specifier: 5.30.0
+        version: 5.30.0
       '@fontsource-variable/inter':
         specifier: 5.3.0
         version: 5.3.0
@@ -71,6 +74,14 @@ importers:
         version: 7.3.6(@types/node@24.13.3)
 
 packages:
+
+  '@azure/msal-browser@5.30.0':
+    resolution: {integrity: sha512-o/ADxWxEFcVrE65a7ssOGuxnivq8lcy+2hSGlOOwtn0gGd6iiwl3q8/BMVRorYE81UB/r4B+8WGEUxWnqP7ryA==}
+    engines: {node: '>=0.8.0'}
+
+  '@azure/msal-common@16.17.0':
+    resolution: {integrity: sha512-rNvtEm7Axzj18neIk0C8kjr1ZXbJsHkWDqGedCfOiLVBjSCxWBcbJ26/I7g9owoeGKUoyrOgs73cIk7WxLd9qA==}
+    engines: {node: '>=0.8.0'}
 
   '@babel/code-frame@7.29.7':
     resolution: {integrity: sha512-Aup7aUOfpbAUg2ROOJN6Iw5f9DMBlzu0mIkm/malLQFN/YQgO48wCj0Kxa3sEHJvPVFg7siR+qRInwXd2qhQKw==}
@@ -1672,6 +1683,12 @@ packages:
     engines: {node: '>=10'}
 
 snapshots:
+
+  '@azure/msal-browser@5.30.0':
+    dependencies:
+      '@azure/msal-common': 16.17.0
+
+  '@azure/msal-common@16.17.0': {}
 
   '@babel/code-frame@7.29.7':
     dependencies:

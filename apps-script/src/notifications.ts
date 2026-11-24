@@ -1,4 +1,5 @@
 import { audit } from './audit';
+import { sendEmail } from './mailer';
 import { getSetting, insert, newId, nowIso, settingBoolean, withBatchedLogs } from './store';
 import type { RfaRecord, SessionUser, UserRecord } from './types';
 
@@ -196,7 +197,7 @@ interface Delivery { email: OutgoingEmail; sentAt: string; error: string; disabl
 function deliver(email: OutgoingEmail): Delivery {
   try {
     if (!settingBoolean('EMAIL_ENABLED')) return { email, sentAt: '', error: 'Email delivery is disabled by system configuration.', disabled: true };
-    MailApp.sendEmail({ to: email.toEmail, subject: email.subject, body: email.body, name: 'eRFA' });
+    sendEmail({ to: email.toEmail, subject: email.subject, body: email.body });
     return { email, sentAt: nowIso(), error: '', disabled: false };
   } catch (error) {
     return { email, sentAt: '', error: error instanceof Error ? error.message : String(error), disabled: false };

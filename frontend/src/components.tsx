@@ -4,7 +4,7 @@ import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import { createPortal } from 'react-dom';
 import { api, onDataChanged, prefetch } from './api';
 import { useAuth } from './auth';
-import { GoogleSignInButton } from './googleSignIn';
+import { SignInButtons } from './signIn';
 import { statusLabel } from './format';
 import { useAppUpdates } from './updates';
 import { hiddenFromQueue, onDecisionsChanged } from './decisions';
@@ -73,8 +73,8 @@ function SessionExpiredDialog() {
     <section className="dialog session-dialog" role="alertdialog" aria-modal="true" aria-labelledby="session-expired-title">
       <header><h2 id="session-expired-title">Please sign in again</h2></header>
       <div className="dialog-body">
-        <p>For your security, your Google sign-in lasts about an hour. Sign in again{user ? ` as ${user.EMAIL}` : ''} to continue. Anything you typed on this page is kept; just repeat your last action after signing in.</p>
-        {busy ? <Spinner label="Verifying your Google account" /> : <GoogleSignInButton onCredential={(credential) => { setBusy(true); void renewCredential(credential).finally(() => setBusy(false)); }} />}
+        <p>Your sign-in has ended. Sign in again{user ? ` as ${user.EMAIL}` : ''} to continue. Anything you typed on this page is kept; just repeat your last action after signing in.</p>
+        {busy ? <Spinner label="Verifying your account" /> : <SignInButtons loginHint={user?.EMAIL ?? ''} onCredential={(credential) => { setBusy(true); void renewCredential(credential).finally(() => setBusy(false)); }} />}
         <div className="dialog-actions"><button className="button ghost" onClick={signOut}>Sign out instead</button></div>
       </div>
     </section>

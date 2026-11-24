@@ -26,11 +26,12 @@ const viewKey = (action: string, payload: Record<string, unknown>) => JSON.strin
 const STORE_KEY = 'erfa_view_cache_v1';
 const STORE_LIMIT_CHARS = 1_500_000;
 let storedSession: unknown;
+/** The account a sign-in token belongs to: email (Google) or user principal name (Microsoft 365). */
 function tokenEmail(token: string): string {
   try {
     const part = token.split('.')[1] ?? '';
-    const json = JSON.parse(atob(part.replace(/-/g, '+').replace(/_/g, '/'))) as { email?: string };
-    return String(json.email ?? '').toLowerCase();
+    const json = JSON.parse(atob(part.replace(/-/g, '+').replace(/_/g, '/'))) as { email?: string; upn?: string; preferred_username?: string; unique_name?: string };
+    return String(json.email || json.upn || json.preferred_username || json.unique_name || '').toLowerCase();
   } catch { return ''; }
 }
 function forgetStored(): void { storedSession = undefined; try { sessionStorage.removeItem(STORE_KEY); } catch { /* storage unavailable */ } }
@@ -97,7 +98,7 @@ export function onSessionProblem(listener: (problem: SessionProblem, message: st
 }
 function reportSessionProblem(problem: SessionProblem, message: string): void { sessionListeners.forEach((listener) => listener(problem, message)); }
 
-/** Expiry time (ms) from the Google ID token itself, or 0 if it cannot be read. */
+/** Expiry time (ms) from the sign-in token itself, or 0 if it cannot be read. */
 export function tokenExpiresAt(token: string): number {
   try {
     const part = token.split('.')[1] ?? '';
@@ -106,6 +107,23 @@ export function tokenExpiresAt(token: string): number {
   } catch { return 0; }
 }
 const EXPIRY_MARGIN_MS = 30_000;
+// Renew a little early so a slow request never arrives with an expired token.
+const RENEW_MARGIN_MS = 5 * 60_000;
+let tokenRenewer: (() => Promise<string>) | null = null;
+let renewing: Promise<string> | null = null;
+/** Set how to get a fresh token without asking the user (Microsoft 365 sign-in), or null. */
+export function setTokenRenewer(renewer: (() => Promise<string>) | null): void { tokenRenewer = renewer; }
+async function renewedToken(current: string): Promise<string> {
+  if (!tokenRenewer) return current;
+  renewing ??= tokenRenewer().catch(() => '').finally(() => { renewing = null; });
+  const fresh = await renewing;
+  // Only take a renewed token for the same account, never someone else's.
+  if (fresh && tokenEmail(fresh) === tokenEmail(current) && tokenExpiresAt(fresh) > tokenExpiresAt(current)) {
+    sessionStorage.setItem(TOKEN_KEY, fresh);
+    return fresh;
+  }
+  return current;
+}
 const SESSION_EXPIRED_MESSAGE = 'Your sign-in has expired. Please sign in again to continue — your work on this page is kept.';
 
 export class ApiError extends Error {
@@ -120,11 +138,12 @@ export function setToken(token: string): void {
   if (token) sessionStorage.setItem(TOKEN_KEY, token);
   else { sessionStorage.removeItem(TOKEN_KEY); lastGood.clear(); forgetStored(); }
 }
-export function isConfigured(): boolean { return Boolean(API_URL && import.meta.env.VITE_GOOGLE_CLIENT_ID); }
+export function isConfigured(): boolean { return Boolean(API_URL && ((import.meta.env.VITE_MS_CLIENT_ID && import.meta.env.VITE_MS_TENANT_ID) || import.meta.env.VITE_GOOGLE_CLIENT_ID)); }
 
 export async function api<T>(action: string, payload: Record<string, unknown> = {}): Promise<T> {
   if (!API_URL) throw new ApiError('CONFIGURATION_REQUIRED', 'The eRFA API URL is not configured.');
-  const idToken = getToken();
+  let idToken = getToken();
+  if (idToken && tokenExpiresAt(idToken) && tokenExpiresAt(idToken) - RENEW_MARGIN_MS <= Date.now()) idToken = await renewedToken(idToken);
   if (idToken && action !== 'session') {
     const expiresAt = tokenExpiresAt(idToken);
     if (expiresAt && expiresAt - EXPIRY_MARGIN_MS <= Date.now()) {

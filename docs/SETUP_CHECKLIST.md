@@ -1,109 +1,148 @@
 # FEU Bataan eRFA — Setup Checklist
 
-Do these steps once, in order. They use your own Google and GitHub accounts, so nothing here has been done for you yet.
-
-Names used below (change them if you like, but keep them consistent):
+Do these once, in order. About 1 hour in total. Each part says **who** does it.
 
 | Thing | Value |
 |---|---|
-| GitHub repository | `feu-bataan-erfa` |
-| Website address | `https://<github-user>.github.io/feu-bataan-erfa/` |
-| Google Workspace domain | `feu.edu.ph` |
+| Website | `https://feubataan.github.io/feu-bataan-erfa/` |
+| GitHub account / repository | `FeuBataan` / `feu-bataan-erfa` |
+| Microsoft 365 domain | `uncbataan.edu.ph` |
+| Mailbox that sends eRFA emails | `erfa@uncbataan.edu.ph` (already exists) |
+| Sign-in | Microsoft 365 single sign-on: staff already signed in to Outlook or Teams go straight in |
+| Database and attachments | Google Sheets + Google Drive in a campus Google account |
 
-Tip: sign in to Google with an **@feu.edu.ph** account for every Google step, so the database, Drive files and emails belong to the campus.
+**Never paste the client secret into chat, email, GitHub or the spreadsheet.** It goes only into Apps Script → Script Properties (step 2.5).
 
 ---
 
-## 1. GitHub repository (website code)
+## 1. Microsoft 365 — IT administrator (about 20 minutes)
 
-1. On GitHub, create a new **empty** repository named `feu-bataan-erfa` (no README, no licence).
-2. In this folder, connect and push:
-   ```bash
-   git remote add origin https://github.com/<github-user>/feu-bataan-erfa.git
-   git push -u origin main
-   ```
-3. Repository **Settings → Pages → Source: GitHub Actions**.
-4. The first workflow run will fail or show "not configured" until step 5 is done. That is expected.
+Needs a Global Administrator or Application Administrator. The `erfa@` account itself is not an admin.
 
-## 2. Apps Script project (backend)
+**1.1 Register the app.** Open <https://entra.microsoft.com> → **Applications → App registrations → New registration**:
+- Name: `eRFA`
+- Supported account types: **Accounts in this organizational directory only (single tenant)**
+- Redirect URI: platform **Single-page application (SPA)**, value `https://feubataan.github.io/feu-bataan-erfa/auth-redirect.html`
+- Click **Register**. From the Overview page copy the **Application (client) ID** and the **Directory (tenant) ID**. These two are not secret.
 
-1. Go to <https://script.google.com> → **New project**. Name it `FEU Bataan eRFA`.
-2. Project Settings → copy the **Script ID**.
-3. In `apps-script/`, copy `.clasp.json.example` to `.clasp.json` and paste the Script ID (this file is git-ignored).
-4. Upload the code (needs `npm i -g @google/clasp` and `clasp login` once):
-   ```bash
-   pnpm --filter @erfa/apps-script push
-   ```
-   Without clasp: run `pnpm --filter @erfa/apps-script build`, then paste `apps-script/dist/Code.js` and `apps-script/dist/appsscript.json` into the editor (show the manifest under Project Settings).
-5. In the editor, select **`setupDatabase`** → **Run**. Approve the Sheets, Drive, Mail and external-request permissions. The log shows the new database spreadsheet URL. Open it and keep the tab.
-6. **Deploy → New deployment → Web app**: *Execute as:* Me, *Who has access:* Anyone. Copy the `/exec` URL. This is `VITE_API_URL`.
-   Later backend updates: edit this same deployment (Manage deployments → Edit → New version) so the URL never changes.
+**1.2 Permissions.** In the app → **API permissions**:
+- `Microsoft Graph → User.Read` (Delegated) is already there. Keep it. It lets eRFA read the signed-in person's name and email.
+- **Add a permission → Microsoft Graph → Application permissions → `Mail.Send`**.
+- Click **Grant admin consent for (your organization)**. Both rows should show a green check.
 
-## 3. Google Cloud: OAuth client and consent screen
+**1.3 Secret.** In the app → **Certificates & secrets → New client secret**:
+- Description `eRFA mail`, expires **24 months**.
+- Copy the **Value** column right away; it is shown only once. You will paste it in step 2.5.
+- Put a calendar reminder 2 weeks before the expiry date. See "Renewing the secret" at the end.
 
-1. Open <https://console.cloud.google.com> → create a project `FEU Bataan eRFA`.
-2. **APIs & Services → OAuth consent screen**:
-   - User type: **Internal** if every user has an @feu.edu.ph account and this project belongs to the feu.edu.ph organisation. Choose **External** (then **Publish app → In production**) if any approver signs in with a non-feu.edu.ph account.
-   - App name `eRFA – FEU Bataan Campus`, support email, logo (optional).
-   - Privacy policy URL: `https://<github-user>.github.io/feu-bataan-erfa/privacy.html`.
-   - Scopes: only the defaults (`openid`, `email`, `profile`).
-3. **Credentials → Create credentials → OAuth client ID → Web application**:
-   - Authorized JavaScript origins: `https://<github-user>.github.io` (and `http://localhost:5173` for local testing).
-   - No redirect URI and no client secret needed.
-   - Copy the **Client ID**. This is `VITE_GOOGLE_CLIENT_ID`.
+**1.4 Allow sending only from erfa@.** Without this step, `Mail.Send` could send as any mailbox. Run in PowerShell as an Exchange admin (replace `<CLIENT-ID>`):
 
-## 4. Database settings
+```powershell
+Install-Module ExchangeOnlineManagement -Scope CurrentUser
+```
+```powershell
+Connect-ExchangeOnline
+```
+```powershell
+New-DistributionGroup -Name "eRFA Senders" -Alias erfasenders -Type Security -Members erfa@uncbataan.edu.ph
+```
+```powershell
+New-ApplicationAccessPolicy -AppId <CLIENT-ID> -PolicyScopeGroupId erfasenders@uncbataan.edu.ph -AccessRight RestrictAccess -Description "eRFA may send only as erfa@uncbataan.edu.ph"
+```
 
-In the database spreadsheet → `SETTINGS` sheet, set:
+After about 30 minutes, check it. The first command should say `Granted`, the second `Denied`:
+
+```powershell
+Test-ApplicationAccessPolicy -Identity erfa@uncbataan.edu.ph -AppId <CLIENT-ID>
+```
+```powershell
+Test-ApplicationAccessPolicy -Identity <any-other-staff>@uncbataan.edu.ph -AppId <CLIENT-ID>
+```
+
+**1.5 Staff list.** Microsoft 365 admin center <https://admin.microsoft.com> → **Users → Active users → Export users** → save the CSV. You will import it in step 5.
+
+## 2. Google Apps Script — database owner (about 15 minutes)
+
+Use one campus-owned Google account (for example a new Gmail made for eRFA) with **2-Step Verification on** and a backup admin. This account owns the database and attachments.
+
+1. <https://script.google.com> → **New project** → name it `FEU Bataan eRFA`. Copy the **Script ID** from Project Settings and send it to the developer.
+2. The developer uploads the code (`pnpm --filter @erfa/apps-script push`, with `apps-script/.clasp.json` holding the Script ID).
+3. In the editor, choose **`setupDatabase`** → **Run** and approve the permissions. The log shows the database spreadsheet link.
+4. **Deploy → New deployment → Web app**: *Execute as* **Me**, *Who has access* **Anyone**. Copy the `/exec` URL. Later updates: Manage deployments → Edit → New version, so the URL never changes.
+5. **Project Settings → Script Properties → Add script property**: name `MS_CLIENT_SECRET`, value = the secret from step 1.3. This is the only place the secret goes.
+
+## 3. Database settings — developer or admin
+
+In the database spreadsheet → `SETTINGS` sheet:
 
 | Key | Value |
 |---|---|
-| `GOOGLE_CLIENT_ID` | the Client ID from step 3 |
-| `FRONTEND_URL` | `https://<github-user>.github.io/feu-bataan-erfa` (no trailing slash) |
-| `ALLOWED_DOMAIN` | `feu.edu.ph` — leave blank if approvers from other domains must sign in |
+| `MS_TENANT_ID` | Directory (tenant) ID from 1.1 |
+| `MS_CLIENT_ID` | Application (client) ID from 1.1 |
+| `MAIL_SENDER` | `erfa@uncbataan.edu.ph` |
+| `ALLOWED_DOMAIN` | `uncbataan.edu.ph` (already filled in) |
+| `FRONTEND_URL` | `https://feubataan.github.io/feu-bataan-erfa` (no trailing slash) |
+| `MAIL_FALLBACK_TO_GOOGLE` | `TRUE` (if Outlook ever fails, the email still goes out through Google) |
 
-Then create the first administrator. In the Apps Script editor, add a file **Bootstrap.gs** with the real admin's email and name:
+Then in the Apps Script editor:
+- Choose **`testOutlookEmail`** → **Run**. A test email should arrive in the `erfa@` mailbox. If it fails, the log names what is missing.
+- Create the first administrator. Add a file **Bootstrap.gs** with the admin's real school email and name, run `runBootstrap` once, then delete the file:
 
 ```js
 function runBootstrap() {
-  bootstrapAdmin('admin@feu.edu.ph', 'Administrator Name');
+  bootstrapAdmin('admin@uncbataan.edu.ph', 'Administrator Name');
 }
 ```
 
-Select `runBootstrap` → **Run** once, then delete Bootstrap.gs (the next `clasp push` would remove it anyway).
+## 4. GitHub — repository owner (about 5 minutes)
 
-## 5. GitHub repository variables
-
-Repository **Settings → Secrets and variables → Actions → Variables → New repository variable**:
+1. Signed in as **FeuBataan**, create an **empty** repository `feu-bataan-erfa` (no README). The developer pushes the code.
+2. **Settings → Pages → Source: GitHub Actions**.
+3. **Settings → Secrets and variables → Actions → Variables**, add:
 
 | Variable | Value |
 |---|---|
-| `VITE_API_URL` | the `/exec` URL from step 2.6 |
-| `VITE_GOOGLE_CLIENT_ID` | the Client ID from step 3.3 |
-| `VITE_BASE_PATH` | `/feu-bataan-erfa/` (use `/` for a custom domain) |
+| `VITE_API_URL` | the `/exec` URL from 2.4 |
+| `VITE_MS_CLIENT_ID` | Application (client) ID |
+| `VITE_MS_TENANT_ID` | Directory (tenant) ID |
 
-Then **Actions → Check and deploy FEU Bataan eRFA frontend → Run workflow**. When it finishes, open the website address.
+4. **Actions → Check and deploy FEU Bataan eRFA frontend → Run workflow**. When it finishes, open the website.
 
-## 6. First sign-in and campus data
+## 5. First sign-in and staff — eRFA administrator
 
-1. Sign in with the bootstrapped admin account.
-2. **Administration → Departments**: add the campus departments and mark academic ones. Use code `PPU` (or a name containing "Procurement") for the procurement office.
-3. **Administration → Users**: add users (or use the import tool) and tick who can create and who can approve RFAs. Set department heads.
-4. **Administration → Official Approval Settings** — choose each official from the user list:
-   - Reviewed and Noted mandatory
-   - Approved mandatory — Finance official (emailed first)
-   - Approved mandatory — VP for Admin and Finance
-   - VP for Academic Affairs (academic departments)
-   - President (at or above the threshold) and the threshold amount
+1. Open the website and **Sign in with Microsoft** using the bootstrapped admin account.
+2. **Administration → Users → Add staff from Microsoft 365**: choose the CSV from step 1.5. Untick students, shared mailboxes and anything not staff, check the count, then **Import**. Everyone imported can create RFAs. Run it again any time; existing people are updated, never deleted.
+3. **Administration → Departments**: mark academic departments, set each department head, and make sure procurement has code `PPU` or "Procurement" in its name.
+4. **Administration → Users**: tick **Approve** for approvers.
+5. **Administration → Official Approval Settings**: choose each official:
+   - Reviewed and Noted (mandatory)
+   - Approved By: Finance official (emailed first), then VP for Admin and Finance
+   - VP for Academic Affairs
+   - President, and the threshold amount
    - JHS/SHS Principal (optional)
 
-   RFAs cannot be submitted until the Reviewed and Noted and Approved By officials are set.
+## 6. Before going live
 
-## 7. Before going live
+- [ ] File a test RFA through every approver: submit → each approval → Approved → Implementation → Closed.
+- [ ] The emails arrive **from erfa@uncbataan.edu.ph** and their links open the RFA.
+- [ ] The `NOTIFICATIONS` sheet has no `FAILED` rows.
+- [ ] Replace the placeholder logo: `frontend/public/school-logo.svg`, `school-logo-light.svg` and `favicon.svg`.
+- [ ] Add the administrator contact to `frontend/public/privacy.html` under "Questions and requests".
+- [ ] Clear the test RFAs with the reset tool in [MAINTENANCE.md](MAINTENANCE.md).
 
-- [ ] File a test RFA end to end with test accounts: submit → each approver → Approved → Implementation → Closed.
-- [ ] Check that notification emails arrive and their links open the RFA.
-- [ ] Check the `NOTIFICATIONS` sheet for `FAILED` rows.
-- [ ] Replace the placeholder logo: `frontend/public/school-logo.svg` (white backgrounds), `school-logo-light.svg` (green sidebar), `favicon.svg`. Keep the file names, or update the references in `LoginPage.tsx`, `components.tsx` and `RfaDetailPage.tsx` if you use PNG.
-- [ ] Add an administrator contact (email or office) to `frontend/public/privacy.html` under "Questions and requests".
-- [ ] To clear test RFAs before launch, use the RFA reset tool described in [MAINTENANCE.md](MAINTENANCE.md).
+---
+
+### Renewing the secret (every 24 months)
+
+Entra → eRFA app → Certificates & secrets → **New client secret** → copy the Value. Replace `MS_CLIENT_SECRET` in Apps Script Script Properties, run `testOutlookEmail`, then delete the old secret. If it expires unnoticed, emails go out through Google and nothing is lost, but `[eRFA]` emails come from the Google account instead of `erfa@`.
+
+### If something goes wrong
+
+| Message | Fix |
+|---|---|
+| "eRFA has not been approved in your school Microsoft 365 yet" | Step 1.2: Grant admin consent. |
+| "The Microsoft sign-in window was blocked" | Allow pop-ups for the eRFA site. |
+| "Your account (…) is not registered in eRFA" | Add the person in Administration → Users, or import them. |
+| "Microsoft sign-in is not configured" | Step 3: `MS_TENANT_ID` and `MS_CLIENT_ID`. |
+| `testOutlookEmail`: "Access is denied" or "ErrorAccessDenied" | Step 1.4 is not applied yet (wait up to an hour), or `MAIL_SENDER` is not in the "eRFA Senders" group. |
+| `testOutlookEmail`: "Outlook sign-in failed" | Wrong or expired secret in Script Properties (step 2.5). |

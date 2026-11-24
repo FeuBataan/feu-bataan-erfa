@@ -2,7 +2,7 @@
 
 ## Initial setup
 
-Run `setupDatabase()` and then the one-time `bootstrapAdmin(realEmail, realName)` function from the Apps Script editor. This deliberate step avoids inventing an administrator. Set the OAuth client ID, frontend URL, and optional Workspace domain in `SETTINGS` before sign-in.
+Run `setupDatabase()` and then the one-time `bootstrapAdmin(realEmail, realName)` function from the Apps Script editor. This deliberate step avoids inventing an administrator. Set `MS_TENANT_ID`, `MS_CLIENT_ID`, `MAIL_SENDER` and `FRONTEND_URL` in `SETTINGS` before sign-in. To add staff, export users from the Microsoft 365 admin center and use **Administration → Users → Add staff from Microsoft 365**.
 
 ## Configuration order
 
@@ -16,7 +16,7 @@ Requester and approver are not exclusive roles. The server rejects a requester w
 
 Deactivate obsolete users, departments, or matrix routes instead of deleting spreadsheet rows. Historical RFAs continue to show the identities copied at the time of action.
 
-The **System Logs** tab shows recent audit events and notification delivery results. `FAILED` contains the MailApp error; `PENDING` indicates email was disabled in settings. Correct the cause before manually retriggering a workflow event—do not edit a notification record to claim delivery.
+The **System Logs** tab shows recent audit events and notification delivery results. `FAILED` contains the delivery error (Outlook, then Google if both failed); `PENDING` indicates email was disabled in settings. Correct the cause before manually retriggering a workflow event—do not edit a notification record to claim delivery.
 # Budget management
 
 Administrators can configure department budgets, over-budget policy, and expense categories under **Budget Management**, and filter/export financial RFAs from **Expense Reports**. Budget changes must use a reasoned adjustment rather than overwriting history. See [Budget Management](BUDGET_MANAGEMENT.md).

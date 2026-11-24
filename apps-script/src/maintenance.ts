@@ -1,4 +1,5 @@
 import { audit } from './audit';
+import { sendEmail } from './mailer';
 import { archivePastSchoolYears, schoolYearLabel, visiblePastYears, currentSchoolYear } from './archive';
 import { backupDatabase, manilaToday } from './backup';
 import { toBoolean } from './core';
@@ -25,7 +26,7 @@ export function emailAdmins(subject: string, body: string): void {
   try {
     if (!settingBoolean('EMAIL_ENABLED')) return;
     const recipients = all<UserRecord>('USERS').filter((u) => toBoolean(u.IS_ADMIN) && toBoolean(u.ACTIVE) && u.EMAIL).map((u) => String(u.EMAIL));
-    if (recipients.length) MailApp.sendEmail({ to: [...new Set(recipients)].join(','), subject: `[eRFA] ${subject}`, body, name: 'eRFA' });
+    if (recipients.length) sendEmail({ to: [...new Set(recipients)].join(','), subject: `[eRFA] ${subject}`, body });
   } catch { /* an email problem must never undo a finished backup or archive */ }
 }
 

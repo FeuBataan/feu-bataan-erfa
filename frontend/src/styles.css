@@ -210,6 +210,13 @@ tbody td small { display: block; color: var(--muted); font-size: var(--text-xs);
 .login-title h1 { margin: .5rem 0 .8rem; color: var(--navy); font-size: clamp(2.1rem, 3vw, 2.65rem); line-height: 1.13; letter-spacing: -.025em; }
 .login-title p { margin: 0; color: var(--muted); line-height: 1.58; font-size: .94rem; max-width: 380px; }
 .google-button { width: 100%; max-width: 320px; margin-top: 1.7rem; min-height: 44px; }
+.sign-in-buttons { display: grid; gap: .75rem; width: 100%; max-width: 320px; margin-top: 1.7rem; }
+.sign-in-buttons .google-button { margin-top: 0; }
+.microsoft-button { display: inline-flex; align-items: center; justify-content: center; gap: .75rem; width: 100%; min-height: 44px; padding: 0 1rem; border: 1px solid #8c8c8c; border-radius: 4px; background: #fff; color: #5e5e5e; font: 600 15px/1 'Segoe UI', system-ui, sans-serif; cursor: pointer; }
+.microsoft-button:hover:not(:disabled) { background: #f3f3f3; }
+.microsoft-button:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
+.microsoft-button:disabled { cursor: wait; opacity: .75; }
+.session-dialog .sign-in-buttons { margin: .5rem auto 0; }
 .login-help { margin: 1.55rem 0 0; font-size: .76rem; color: var(--subtle); max-width: 380px; line-height: 1.6; border-top: 1px solid var(--line-light); padding-top: 1rem; }
 .login-credit { position: absolute; bottom: 1.35rem; left: clamp(2rem, 5vw, 4.5rem); margin: 0; color: #8793a5; font-size: .68rem; letter-spacing: .01em; }
 .login-aside { display: flex; align-items: flex-end; padding: 2.5rem; color: #fff; background-size: cover; background-position: center; }
@@ -985,3 +992,10 @@ html { touch-action: manipulation; }
 @media (prefers-reduced-motion: reduce) { .attachment-viewer { animation: none; } }
 @media print { .attachment-viewer { display: none !important; } }
 .attachments .attachment-view svg { color: inherit !important; width: 16px; }
+
+/* Microsoft 365 staff import */
+.m365-departments { margin: 0 0 1rem; min-width: 0; border: 1px solid var(--line, #d9e2dd); border-radius: 8px; padding: .75rem 1rem; display: grid; gap: .35rem; max-height: 320px; overflow: auto; }
+.m365-departments legend { padding: 0 .35rem; font-weight: 600; }
+.m365-departments .checkbox { justify-content: flex-start; text-align: left; font-weight: 400; }
+.m365-departments .checkbox input { flex: none; margin: 0; }
+.m365-departments small { margin-left: .35rem; }

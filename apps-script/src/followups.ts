@@ -1,4 +1,5 @@
 import { audit } from './audit';
+import { sendEmail } from './mailer';
 import { normalizeEmail, toBoolean } from './core';
 import { buildEmail, notify, sendQueuedEmails } from './notifications';
 import { all, getSetting, nowIso, setSetting, settingBoolean, updateBy } from './store';
@@ -54,7 +55,7 @@ export function retryFailedEmails(now = new Date()): { retried: number; sent: nu
     const tries = Number(row.RETRY_COUNT || 0) + 1;
     try {
       const { subject, body } = buildEmail(String(row.NOTIFICATION_TYPE), String(row.RECIPIENT || ''), rfa, '', frontendLink(rfa));
-      MailApp.sendEmail({ to: String(row.RECIPIENT_EMAIL), subject, body, name: 'eRFA' });
+      sendEmail({ to: String(row.RECIPIENT_EMAIL), subject, body });
       updateBy('NOTIFICATIONS', 'NOTIFICATION_ID', String(row.NOTIFICATION_ID), { STATUS: 'SENT', SENT_AT: nowIso(), RETRY_COUNT: tries, ERROR_MESSAGE: '' });
       sent += 1;
     } catch (error) {
@@ -107,7 +108,7 @@ export function stuckRfaDigest(now = new Date()): { stuck: number; emailed: bool
     'Approvers are reminded automatically. If someone is away or has left, an administrator can hand their pending approvals to another person in eRFA: Administration → Users → Hand over pending approvals.', '',
     'eRFA - automatic follow-ups'
   ].join('\n');
-  try { MailApp.sendEmail({ to: [...new Set(admins)].join(','), subject: `[eRFA] ${stuck.length} RFA${stuck.length === 1 ? '' : 's'} waiting ${STUCK_DAYS}+ days`, body, name: 'eRFA' }); }
+  try { sendEmail({ to: [...new Set(admins)].join(','), subject: `[eRFA] ${stuck.length} RFA${stuck.length === 1 ? '' : 's'} waiting ${STUCK_DAYS}+ days`, body }); }
   catch { return { stuck: stuck.length, emailed: false }; }
   return { stuck: stuck.length, emailed: true };
 }

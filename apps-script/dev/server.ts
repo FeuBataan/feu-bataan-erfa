@@ -28,11 +28,19 @@ Object.assign(globalThis, {
     computeDigest: (_alg: string, text: string) => [...createHash('sha256').update(text).digest()],
     base64EncodeWebSafe: (bytes: number[]) => Buffer.from(bytes).toString('base64').replace(/\+/g, '-').replace(/\//g, '_'),
     base64Encode: (bytes: number[]) => Buffer.from(bytes).toString('base64'),
+    base64Decode: (text: string) => [...Buffer.from(text, 'base64')],
+    newBlob: (bytes: number[]) => ({ getDataAsString: () => Buffer.from(bytes).toString('utf8') }),
     getUuid: () => randomUUID(),
     formatDate: (date: Date, _tz: string, fmt: string) => { const d = new Date(date.getTime() + 8 * 3600000).toISOString(); return fmt === 'yyyy-MM-dd' ? d.slice(0, 10) : `${d.slice(0, 10)} ${d.slice(11, 13)}${d.slice(14, 16)}`; }
   },
   UrlFetchApp: {
-    fetch: (url: string) => {
+    fetch: (url: string, options?: { headers?: Record<string, string> }) => {
+      if (url.startsWith('https://graph.microsoft.com/v1.0/me')) {
+        // Microsoft 365 sign-in stand-in: the "Graph" profile is read from the demo token itself.
+        const bearer = String(options?.headers?.Authorization || '').replace(/^Bearer /, '');
+        const claims = JSON.parse(Buffer.from((bearer.split('.')[1] || '').replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8') || '{}');
+        return { getResponseCode: () => (claims.upn ? 200 : 401), getContentText: () => JSON.stringify({ userPrincipalName: claims.upn, mail: claims.upn, displayName: claims.name || claims.upn }) };
+      }
       const token = decodeURIComponent(url.split('id_token=')[1] || '');
       const payload = JSON.parse(Buffer.from((token.split('.')[1] || '').replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8') || '{}');
       return { getResponseCode: () => (payload.email ? 200 : 400), getContentText: () => JSON.stringify({ aud: 'local-demo-client', iss: 'accounts.google.com', email_verified: 'true', email: payload.email, exp: String(payload.exp), name: payload.name || payload.email }) };
@@ -46,6 +54,8 @@ Object.assign(globalThis, {
 });
 
 // --- Sample school ---
+const DEMO_TENANT = '00000000-0000-0000-0000-00000000demo';
+const DEMO_CLIENT = '00000000-0000-0000-0000-0000000client';
 setupSchema();
 const stamp = new Date().toISOString();
 const dept = (id: string, name: string, code: string, academic = false) => insert('DEPARTMENTS', { DEPARTMENT_ID: id, DEPARTMENT_NAME: name, DEPARTMENT_CODE: code, ACTIVE: true, CREATED_AT: stamp, UPDATED_AT: stamp, DEPARTMENT_HEAD_USER_ID: '', IS_ACADEMIC: academic });
@@ -72,6 +82,8 @@ person('procurement', 'Ocampo, Joy L.', 'procurement@demo.edu', 'd_ppu', 'Procur
 const head = (department: string, user: string) => insert('DEPARTMENT_HEADS', { HEAD_ID: `h_${department}_${user}`, DEPARTMENT_ID: department, USER_ID: user, ACTIVE: true, CREATED_AT: stamp, UPDATED_AT: stamp });
 head('d_it', 'ithead'); head('d_coe', 'coehead'); head('d_shs', 'shshead'); head('d_fin', 'vpadmin');
 setSetting('GOOGLE_CLIENT_ID', 'local-demo-client');
+setSetting('MS_TENANT_ID', DEMO_TENANT);
+setSetting('MS_CLIENT_ID', DEMO_CLIENT);
 setSetting('EMAIL_ENABLED', 'TRUE');
 setSetting('FRONTEND_URL', 'http://localhost:5174/feu-bataan-erfa/');
 setSetting('REVIEWED_MANDATORY_USER_ID', 'reviewer');
@@ -115,7 +127,12 @@ createServer((req, res) => {
   const url = new URL(req.url || '/', `http://localhost:${PORT}`);
   if (req.method === 'GET' && url.pathname === '/dev-token') {
     const email = url.searchParams.get('email') || 'admin@demo.edu';
-    const token = `${b64url('{"alg":"none"}')}.${b64url(JSON.stringify({ email, exp: Math.floor(Date.now() / 1000) + 8 * 3600 }))}.demo`;
+    const exp = Math.floor(Date.now() / 1000) + 8 * 3600;
+    // ?provider=microsoft gives a Microsoft 365-shaped token, to exercise Sign in with Microsoft.
+    const claims = url.searchParams.get('provider') === 'microsoft'
+      ? { iss: `https://sts.windows.net/${DEMO_TENANT}/`, aud: '00000003-0000-0000-c000-000000000000', tid: DEMO_TENANT, appid: DEMO_CLIENT, upn: email, exp }
+      : { email, exp };
+    const token = `${b64url('{"alg":"none"}')}.${b64url(JSON.stringify(claims))}.demo`;
     res.writeHead(200, { 'Content-Type': 'text/plain' }); res.end(token); return;
   }
   if (req.method === 'GET' && url.pathname === '/outbox') { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(outbox)); return; }

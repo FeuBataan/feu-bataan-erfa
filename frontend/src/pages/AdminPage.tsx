@@ -5,6 +5,7 @@ import { api } from '../api';
 import { Dialog, ErrorNotice, Spinner, SuccessNotice } from '../components';
 import { date, dateTime, money, stepLabel } from '../format';
 import type { AdminData, Department, Matrix, User } from '../types';
+import { buildImportPayload, departmentCounts, readM365Users, type M365Person } from '../m365Import';
 
 type Tab = 'users'|'departments'|'matrix'|'logs';
 
@@ -65,6 +66,7 @@ export function AdminPage() {
         <button className="button primary" onClick={() => setEditing('new')}><Plus size={16}/> Add {tab === 'users' ? 'User' : tab === 'departments' ? 'Department' : 'Route'}</button>
       </header>}
       {tab === 'users' && <>
+        <M365ImportPanel departments={data.departments} onSaved={(summary) => { setSuccess(`Microsoft 365 import saved. ${summary}`); load(); }} onError={setError} />
         <details className="setup-tools"><summary>Setup tools (one-time import and clean-up)</summary><UsersImportPanel onSaved={() => { setSuccess('Import saved.'); load(); }} onError={setError} /></details>
         <HandOverPanel key={`${handOverFrom}-${handOverRfa}`} users={data.users} initialFrom={handOverFrom} initialRfaId={handOverRfa} onDone={(message) => { setSuccess(message); load(); }} onError={setError} />
         <UsersTable users={data.users} departments={data.departments} edit={setEditing} />
@@ -86,6 +88,71 @@ export function AdminPage() {
       <AdminForm tab={tab} editing={editing} data={data} onSaved={() => { setEditing(null); setSuccess('Configuration saved.'); load(); }} onError={setError} />
     </Dialog>}
   </>;
+}
+
+const SCHOOL_DOMAIN = 'uncbataan.edu.ph';
+
+/**
+ * Add staff straight from Microsoft 365: Users > Active users > Export users in the admin center,
+ * then pick the CSV here. Choose which departments to bring in (leave out students and shared
+ * mailboxes), review the count, and import. Existing people are updated, never deleted.
+ */
+function M365ImportPanel({ departments, onSaved, onError }: { departments: Department[]; onSaved: (summary: string) => void; onError: (e: string) => void }) {
+  const [people, setPeople] = useState<M365Person[] | null>(null);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [domain, setDomain] = useState(SCHOOL_DOMAIN);
+  const [busy, setBusy] = useState(false);
+  const counts = people ? departmentCounts(people) : [];
+  const payload = people ? buildImportPayload(people, { domain, departments: picked, includeBlocked: false }, departments.map((d) => d.DEPARTMENT_CODE)) : null;
+
+  function readFile(file: File | undefined) {
+    if (!file) return;
+    onError('');
+    const reader = new FileReader();
+    reader.onerror = () => onError('Could not read the file.');
+    reader.onload = () => {
+      try {
+        const found = readM365Users(String(reader.result ?? ''));
+        setPeople(found);
+        // Start with every department that has a name; "(no department)" is usually shared mailboxes and service accounts.
+        setPicked(new Set(departmentCounts(found).map((row) => row.department).filter((name) => name && !/student/i.test(name))));
+      } catch (e) { setPeople(null); onError(e instanceof Error ? e.message : 'Could not read the file.'); }
+    };
+    reader.readAsText(file);
+  }
+  function toggle(name: string) {
+    setPicked((current) => { const next = new Set(current); if (next.has(name)) next.delete(name); else next.add(name); return next; });
+  }
+  async function runImport() {
+    if (!payload?.users.length) return;
+    setBusy(true); onError('');
+    try {
+      const result = await api<{ summary: string }>('admin.users.import', payload);
+      setPeople(null); onSaved(result.summary);
+    } catch (e) { onError(e instanceof Error ? e.message : 'Import failed.'); }
+    finally { setBusy(false); }
+  }
+
+  return <section className="form-card m365-import" style={{ marginBottom: '1rem' }}>
+    <h3>Add staff from Microsoft 365</h3>
+    <p className="muted">In the Microsoft 365 admin center open <b>Users &gt; Active users &gt; Export users</b>, then choose the downloaded CSV here. Everyone imported can create RFAs. Afterwards, tick who can approve, set department heads, and choose the officials.</p>
+    <label className="field"><span>Microsoft 365 user export (CSV)</span><input type="file" accept=".csv,text/csv" onChange={(e) => { readFile(e.target.files?.[0]); e.target.value = ''; }} /></label>
+    {people && <>
+      <label className="field"><span>Only accounts ending in @</span><input value={domain} onChange={(e) => setDomain(e.target.value)} placeholder={SCHOOL_DOMAIN} /></label>
+      <fieldset className="m365-departments">
+        <legend>Departments to import ({people.length} accounts in the file; blocked accounts are skipped)</legend>
+        {counts.map((row) => <label key={row.department || '(none)'} className="checkbox">
+          <input type="checkbox" checked={picked.has(row.department)} onChange={() => toggle(row.department)} />
+          <span>{row.department || '(no department: often shared mailboxes or service accounts)'} <small className="muted">{row.count}</small></span>
+        </label>)}
+      </fieldset>
+      <p><b>{payload?.users.length ?? 0}</b> people and <b>{payload?.departments.length ?? 0}</b> departments will be added or updated.</p>
+      <div className="dialog-actions">
+        <button className="button secondary" onClick={() => setPeople(null)} disabled={busy}>Cancel</button>
+        <button className="button primary" onClick={() => void runImport()} disabled={busy || !payload?.users.length}>{busy ? 'Importing…' : `Import ${payload?.users.length ?? 0} people`}</button>
+      </div>
+    </>}
+  </section>;
 }
 
 function UsersImportPanel({ onSaved, onError }: { onSaved: () => void; onError: (e: string) => void }) {

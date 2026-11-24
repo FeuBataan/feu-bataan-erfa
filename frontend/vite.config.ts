@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { fileURLToPath } from 'node:url';
 
 export default defineConfig({
   plugins: [react()],
@@ -10,6 +11,8 @@ export default defineConfig({
     sourcemap: true,
     target: 'es2020',
     rollupOptions: {
+      // auth-redirect.html is where the Microsoft sign-in pop-up returns (see microsoftSignIn.tsx).
+      input: { main: fileURLToPath(new URL('./index.html', import.meta.url)), authRedirect: fileURLToPath(new URL('./auth-redirect.html', import.meta.url)) },
       output: {
         // Keep rarely-changing libraries in their own long-cached chunk.
         manualChunks(id) {
