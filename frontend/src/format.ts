@@ -59,3 +59,8 @@ export function schoolYearOptions(): Array<{ value: string; label: string }> {
 export const money = (value: number | string): string => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(Number(value || 0));
 export const date = (value: string): string => value ? new Intl.DateTimeFormat('en-PH', { dateStyle: 'medium' }).format(new Date(value.length === 10 ? `${value}T00:00:00` : value)) : '—';
 export const dateTime = (value: string): string => value ? new Intl.DateTimeFormat('en-PH', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '—';
+
+/** Attachments are PDF only. Some browsers leave the type blank, so the .pdf name also counts. */
+export function isPdfFile(file: { name: string; type: string }): boolean {
+  return /\.pdf$/i.test(file.name.trim()) && (file.type === 'application/pdf' || file.type === '');
+}

@@ -191,7 +191,7 @@ export function RfaDetailPage() {
       {/* Older RFAs kept a separate Justification; new ones write it in Purpose and Justification. */}
       {rfa.JUSTIFICATION ? <DocumentSection title="Justification"><p>{rfa.JUSTIFICATION}</p></DocumentSection> : null}
 
-      <DocumentSection title="Picture / Letter Attachment">
+      <DocumentSection title="Letter / Supporting Documents (PDF)">
         <div className="attachments">
           {attachments.length ? attachments.map((attachment) => <button key={attachment.ATTACHMENT_ID} onClick={() => void openAttachment(attachment)} title={viewKind(attachment) === 'other' ? 'Download' : 'View'}>
             <FileText />

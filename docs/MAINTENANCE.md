@@ -83,6 +83,10 @@ Updates are not required for the app to keep working. When you do update:
 
 All colours are CSS variables in `frontend/src/styles.css`. The FEU Bataan palette (green and gold) lives in one `:root` block under "FEU Bataan theme" near the end of the file (`--brand*`, `--gold*`, `--tint*`). Change those values rather than individual rules. The logo files are `frontend/public/school-logo.svg` (for white backgrounds), `school-logo-light.svg` (for the green sidebar) and `favicon.svg`; replace them with the official logo, keeping the same file names.
 
+## Attachments are PDF only
+
+FEU Bataan accepts PDF attachments only, up to `MAX_ATTACHMENT_BYTES` (10 MB) each. The form refuses other files, and the backend also checks that each upload really is a PDF. To allow other types again, add them to `ALLOWED_ATTACHMENT_TYPES` in `apps-script/src/constants.ts` and update `isPdfUpload` in `apps-script/src/core.ts` and the file picker in `frontend/src/pages/RfaFormPage.tsx`.
+
 ## Deploying
 
 - **Website:** push to `main`; GitHub Actions builds and publishes it.

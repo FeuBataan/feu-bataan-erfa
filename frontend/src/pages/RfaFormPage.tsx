@@ -4,7 +4,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, fileToBase64 } from '../api';
 import { useAuth } from '../auth';
 import { ErrorNotice, Spinner } from '../components';
-import { currentSchoolYear, dateInputValue, displayName, isFiscalYear, money, schoolYearLabel } from '../format';
+import { currentSchoolYear, dateInputValue, displayName, isFiscalYear, isPdfFile, money, schoolYearLabel } from '../format';
 import type { ApprovalAssignments, ApprovalSection, Department, EligibleApprover, EmployeeDirectory, Rfa, RfaDetail } from '../types';
 
 interface FormState {
@@ -147,7 +147,7 @@ export function RfaFormPage() {
             notedByNotApplicable: notedByNa
           };
       const rfa = existing ? await api<Rfa>('rfa.update', { rfaId: existing.RFA_ID, ...payload }) : await api<Rfa>('rfa.create', payload);
-      for (const file of files) await api('attachment.upload', { rfaId: rfa.RFA_ID, fileName: file.name, mimeType: file.type, base64: await fileToBase64(file) });
+      for (const file of files) await api('attachment.upload', { rfaId: rfa.RFA_ID, fileName: file.name, mimeType: 'application/pdf', base64: await fileToBase64(file) });
       if (submit) await api(existing?.STATUS === 'RETURNED' ? 'rfa.resubmit' : 'rfa.submit', { rfaId: rfa.RFA_ID });
       navigate(`/rfa/${rfa.RFA_ID}`, { replace: true });
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'The RFA could not be saved.'); }
@@ -297,13 +297,18 @@ export function RfaFormPage() {
       <section className="form-card">
         <div className="section-title">
           <span>05</span>
-          <div><h2>Picture / Letter Attachment</h2><p>Files are stored privately in the configured Google Drive folder.</p></div>
+          <div><h2>Letter / Supporting Documents (PDF)</h2><p>Attach PDF files only. Scan or save pictures and letters as PDF first. Files are stored privately in Google Drive.</p></div>
         </div>
         <label className="upload-zone">
           <Paperclip />
           <b>Choose supporting files</b>
-          <span>PDF, JPG, PNG, DOC, or DOCX - up to 10 MB each</span>
-          <input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" onChange={(e) => setFiles(Array.from(e.target.files ?? []))} />
+          <span>PDF files only - up to 10 MB each</span>
+          <input type="file" multiple accept=".pdf,application/pdf" onChange={(e) => {
+            const chosen = Array.from(e.target.files ?? []);
+            const rejected = chosen.filter((file) => !isPdfFile(file));
+            setError(rejected.length ? `Only PDF files can be attached. Not added: ${rejected.map((file) => file.name).join(', ')}` : '');
+            setFiles(chosen.filter(isPdfFile));
+          }} />
         </label>
         {files.length > 0 && <ul className="file-list">{files.map((file) => <li key={`${file.name}-${file.size}`}>
           <FileText size={16} />

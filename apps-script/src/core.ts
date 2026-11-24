@@ -163,3 +163,13 @@ export function nextAssignedStageAfterAction(
   if (current && !isAssignedSectionComplete(assignedCounts[current] ?? 0, approvedCounts[current] ?? 0)) return current;
   return nextAssignedSection(assignedCounts, currentIndex + 1, sections);
 }
+
+/**
+ * True only for a real PDF: a .pdf name, the PDF type, and file contents that start with "%PDF".
+ * The content check stops other files that were simply renamed to .pdf.
+ */
+export function isPdfUpload(fileName: string, mimeType: string, bytes: ArrayLike<number>): boolean {
+  if (!/\.pdf$/i.test(fileName.trim()) || mimeType !== 'application/pdf') return false;
+  const signature = [0x25, 0x50, 0x44, 0x46]; // %PDF
+  return bytes.length >= 4 && signature.every((byte, i) => (bytes[i] & 0xff) === byte);
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dateInputValue, fiscalYearPattern, isFiscalYear, statusLabel, stepLabel } from './format';
+import { dateInputValue, fiscalYearPattern, isFiscalYear, isPdfFile, statusLabel, stepLabel } from './format';
 
 describe('display formatting', () => {
   it('uses recognizable institutional status terminology', () => {
@@ -30,5 +30,15 @@ describe('school years (June to May)', () => {
     expect(schoolYearOf('2027-06-01')).toBe(2027);
     expect(schoolYearOf(new Date('2027-05-31T16:30:00Z'))).toBe(2027); // already June 1 in Manila
     expect(schoolYearLabel(2026)).toBe('SY 2026–2027');
+  });
+});
+
+describe('isPdfFile', () => {
+  it('allows PDFs only', () => {
+    expect(isPdfFile({ name: 'quote.pdf', type: 'application/pdf' })).toBe(true);
+    expect(isPdfFile({ name: 'SCAN.PDF', type: '' })).toBe(true);
+    expect(isPdfFile({ name: 'photo.jpg', type: 'image/jpeg' })).toBe(false);
+    expect(isPdfFile({ name: 'letter.docx', type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })).toBe(false);
+    expect(isPdfFile({ name: 'fake.pdf', type: 'image/png' })).toBe(false);
   });
 });

@@ -1,7 +1,7 @@
 import { ALLOWED_ATTACHMENT_TYPES, APPROVAL_SECTIONS, ASSIGNMENT_WORKFLOW_MARKER, FIXED_WORKFLOW_MARKER, LEGACY_APPROVAL_SECTIONS, OFFICIAL_WORKFLOW_MARKER, STEP_STATUS, V2_APPROVAL_SECTIONS } from './constants';
 import { audit } from './audit';
 import { commitApprovedFinancialRfa, financialDetail, financialRfaFields, recordActualExpense } from './budget';
-import { formatRfaNumber, isJhsOrShsDepartment, nextAssignedSection, nextAssignedStageAfterAction, normalizeEmail, orderedMatrix, parsePresidentThresholdCents, selectNextApprover, toBoolean, validateExpenseClassification, validateRfaInput } from './core';
+import { formatRfaNumber, isJhsOrShsDepartment, isPdfUpload, nextAssignedSection, nextAssignedStageAfterAction, normalizeEmail, orderedMatrix, parsePresidentThresholdCents, selectNextApprover, toBoolean, validateExpenseClassification, validateRfaInput } from './core';
 import { archivedRows, findArchivedAttachment, findArchivedRfa, schoolYearLabel } from './archive';
 import { notify } from './notifications';
 import { activeRoles, emailOrderFor, hasAllRfasRole, isReplacedOfficial, resolveRole, type ApprovalRole, type RoleStage } from './roles';
@@ -1217,8 +1217,9 @@ export function uploadAttachment(user: SessionUser, payload: Record<string, unkn
   const fileName = String(payload.fileName ?? '').replace(/[\\/:*?"<>|]/g, '_').trim();
   const mimeType = String(payload.mimeType ?? '');
   const base64 = String(payload.base64 ?? '');
-  if (!fileName || !ALLOWED_ATTACHMENT_TYPES.includes(mimeType)) businessError('Attachment must be a PDF, JPG, PNG, DOC, or DOCX file.');
+  if (!fileName || !ALLOWED_ATTACHMENT_TYPES.includes(mimeType)) businessError('Only PDF files can be attached.');
   const bytes = Utilities.base64Decode(base64);
+  if (!isPdfUpload(fileName, mimeType, bytes)) businessError(`${fileName} is not a valid PDF file. Only PDF files can be attached.`);
   const max = Number(getSetting('MAX_ATTACHMENT_BYTES') || 10000000);
   if (!bytes.length || bytes.length > max) businessError(`Attachment must be between 1 byte and ${Math.round(max / 1000000)} MB.`);
   const file = rfaFolder(rfa).createFile(Utilities.newBlob(bytes, mimeType, fileName));

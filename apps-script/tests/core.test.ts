@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canonicalIsoDate, formatRfaNumber, isAssignedSectionComplete, nextAssignedSection, nextAssignedStageAfterAction, selectNextApprover, validateExpenseClassification, validateRfaInput } from '../src/core';
+import { canonicalIsoDate, formatRfaNumber, isAssignedSectionComplete, isPdfUpload, nextAssignedSection, nextAssignedStageAfterAction, selectNextApprover, validateExpenseClassification, validateRfaInput } from '../src/core';
 import { LEGACY_APPROVAL_SECTIONS } from '../src/constants';
 import type { MatrixRecord, UserRecord } from '../src/types';
 
@@ -87,5 +87,18 @@ describe('eRFA workflow core', () => {
     expect(nextAssignedStageAfterAction(assigned, { RECOMMENDING_APPROVAL: 2, REVIEWED_AND_NOTED: 1, APPROVED_BY: 0 }, 1)).toBe('REVIEWED_AND_NOTED');
     expect(nextAssignedStageAfterAction(assigned, { RECOMMENDING_APPROVAL: 2, REVIEWED_AND_NOTED: 2, APPROVED_BY: 0 }, 1)).toBe('APPROVED_BY');
     expect(nextAssignedStageAfterAction(assigned, { RECOMMENDING_APPROVAL: 2, REVIEWED_AND_NOTED: 2, APPROVED_BY: 2 }, 2)).toBeUndefined();
+  });
+});
+
+describe('PDF-only attachments', () => {
+  const pdfBytes = [0x25, 0x50, 0x44, 0x46, 0x2d, 0x31];
+  it('accepts a real PDF', () => {
+    expect(isPdfUpload('Quotation.PDF', 'application/pdf', pdfBytes)).toBe(true);
+  });
+  it('rejects other file types and renamed files', () => {
+    expect(isPdfUpload('photo.jpg', 'image/jpeg', [0xff, 0xd8, 0xff, 0xe0])).toBe(false);
+    expect(isPdfUpload('letter.docx', 'application/pdf', pdfBytes)).toBe(false);
+    expect(isPdfUpload('photo.pdf', 'application/pdf', [0xff, 0xd8, 0xff, 0xe0])).toBe(false);
+    expect(isPdfUpload('empty.pdf', 'application/pdf', [])).toBe(false);
   });
 });
