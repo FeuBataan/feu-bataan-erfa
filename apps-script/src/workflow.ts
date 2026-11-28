@@ -1092,6 +1092,36 @@ function filterRfas(records: RfaRecord[], filters: Record<string, unknown>): Rfa
   }).sort((a, b) => String(b.UPDATED_AT).localeCompare(String(a.UPDATED_AT)));
 }
 
+const MY_DECISIONS = new Set(['APPROVED', 'RETURNED', 'DISAPPROVED']);
+
+/**
+ * "Done by me": every RFA this person approved, returned or disapproved as an approver
+ * (not their own submissions), newest decision first, with what they did, when and at which
+ * step. Archived school years are read from their archive.
+ */
+export function listActedByMe(user: SessionUser, filters: Record<string, unknown>): Array<RfaRecord & { MY_ACTION: string; MY_ACTION_AT: string; MY_STEP: string; MY_REMARKS: string }> {
+  const email = normalizeEmail(user.EMAIL);
+  const schoolYear = Number(filters.schoolYear || 0);
+  const approvals = schoolYear ? archivedRows<SheetRecord>(schoolYear, 'RFA_APPROVALS') : all<SheetRecord>('RFA_APPROVALS');
+  const latest = new Map<string, SheetRecord>();
+  for (const row of approvals) {
+    const action = String(row.ACTION || '');
+    if (!MY_DECISIONS.has(action) || String(row.STEP) === 'PREPARED_BY') continue;
+    if (String(row.APPROVER_USER_ID || '') !== user.USER_ID && normalizeEmail(String(row.APPROVER_EMAIL || '')) !== email) continue;
+    const previous = latest.get(String(row.RFA_ID));
+    if (!previous || String(row.TIMESTAMP || '') > String(previous.TIMESTAMP || '')) latest.set(String(row.RFA_ID), row);
+  }
+  if (!latest.size) return [];
+  const source = schoolYear ? archivedRows<RfaRecord>(schoolYear, 'RFA') : all<RfaRecord>('RFA');
+  const mine = source.filter((rfa) => latest.has(rfa.RFA_ID));
+  return filterRfas(mine, filters)
+    .map((rfa) => {
+      const row = latest.get(rfa.RFA_ID)!;
+      return { ...rfa, MY_ACTION: String(row.ACTION), MY_ACTION_AT: String(row.TIMESTAMP || ''), MY_STEP: String(row.STEP || ''), MY_REMARKS: String(row.REMARKS || '') };
+    })
+    .sort((a, b) => b.MY_ACTION_AT.localeCompare(a.MY_ACTION_AT));
+}
+
 export function listForApproval(user: SessionUser, approvals?: SheetRecord[], records?: RfaRecord[]): RfaRecord[] {
   if (!toBoolean(user.CAN_APPROVE_RFA)) return [];
   const assigned = new Set<string>();

@@ -999,3 +999,14 @@ html { touch-action: manipulation; }
 .m365-departments .checkbox { justify-content: flex-start; text-align: left; font-weight: 400; }
 .m365-departments .checkbox input { flex: none; margin: 0; }
 .m365-departments small { margin-left: .35rem; }
+
+/* For My Action: Waiting for me / Done by me */
+.queue-tabs { display: flex; gap: .25rem; border-bottom: 1px solid var(--line); margin: 0 0 1rem; }
+.queue-tabs a { padding: .6rem .9rem; margin-bottom: -1px; border-bottom: 2px solid transparent; color: var(--muted); font-size: var(--text-sm); font-weight: 600; text-decoration: none; }
+.queue-tabs a:hover { color: var(--ink); }
+.queue-tabs a.active { color: var(--brand); border-bottom-color: var(--brand); }
+.my-decision { display: inline-block; font-weight: 700; font-size: var(--text-sm); }
+.my-decision.approved { color: #18703a; }
+.my-decision.returned { color: #9a5b00; }
+.my-decision.disapproved { color: var(--red); }
+td .my-decision + small { display: block; color: var(--muted); font-size: var(--text-xs); margin-top: 2px; }

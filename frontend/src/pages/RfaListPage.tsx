@@ -1,18 +1,20 @@
-import { CheckCircle2, LoaderCircle, Search, X } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { ArrowRight, CheckCircle2, LoaderCircle, Search, X } from 'lucide-react';
+import { Link, NavLink } from 'react-router-dom';
 import { useEffect, useRef, useState } from 'react';
 import { api, onDataChanged, peek } from '../api';
 import { decisionText, dismissDecision, hiddenFromQueue, useDecisions } from '../decisions';
 import { useAuth } from '../auth';
-import { ErrorNotice } from '../components';
-import type { ArchiveYear, Rfa } from '../types';
+import { ErrorNotice, StatusBadge } from '../components';
+import { dateTime, money, stepLabel } from '../format';
+import type { ActedRfa, ArchiveYear, Rfa } from '../types';
 import { Empty, RfaTable } from './DashboardPage';
 
-type ListMode = 'mine' | 'approvals' | 'all';
+type ListMode = 'mine' | 'approvals' | 'done' | 'all';
 
 const COPY: Record<ListMode, { eyebrow: string; title: string; text: string; empty: string; emptyText: string }> = {
   mine: { eyebrow: 'REQUEST REGISTER', title: 'My RFAs', text: 'The requests you filed. Search, filter, and follow each one from draft through closeout.', empty: 'No matching RFAs', emptyText: 'Try a different search or create a new Request for Approval.' },
   approvals: { eyebrow: 'APPROVAL QUEUE', title: 'For My Action', text: 'Requests currently assigned to you. Review every detail before deciding.', empty: 'No requests need your action', emptyText: 'Your queue is clear.' },
+  done: { eyebrow: 'APPROVAL QUEUE', title: 'For My Action', text: 'Every request you approved, returned or disapproved, and where each one is now.', empty: 'Nothing here yet', emptyText: 'Requests you decide on will be listed here.' },
   all: { eyebrow: 'INSTITUTION REGISTER', title: 'All RFAs', text: 'Every submitted request across all departments. Drafts stay private to their requesters.', empty: 'No matching RFAs', emptyText: 'Try a different search or filter.' }
 };
 
@@ -21,7 +23,8 @@ export function RfaListPage({ mode = 'mine' }: { mode?: ListMode }) {
   const approvalsOnly = mode === 'approvals';
   const approvedOnlyScope = mode === 'all' && user?.ALL_RFAS_SCOPE === 'approved';
   const copy = COPY[mode];
-  const action = approvalsOnly ? 'rfa.forApproval' : mode === 'all' ? 'rfa.all' : 'rfa.list';
+  const doneByMe = mode === 'done';
+  const action = approvalsOnly ? 'rfa.forApproval' : doneByMe ? 'rfa.actedByMe' : mode === 'all' ? 'rfa.all' : 'rfa.list';
   const emptyFilters = approvalsOnly ? {} : { query: '', status: '', expenseClassification: '', fiscalYear: '' };
   // Show the list loaded earlier in this visit straight away; a fresh copy replaces it in the background.
   const [rfas, setRfas] = useState<Rfa[]>(() => peek<Rfa[]>(action, emptyFilters) ?? []);
@@ -78,6 +81,10 @@ export function RfaListPage({ mode = 'mine' }: { mode?: ListMode }) {
         <p>{approvedOnlyScope ? 'Approved, in-implementation, and closed requests across all departments, for procurement.' : copy.text}</p>
       </div>
     </header>
+    {(approvalsOnly || doneByMe) && user?.CAN_APPROVE_RFA && <nav className="queue-tabs" aria-label="For My Action">
+      <NavLink to="/approvals" end>Waiting for me</NavLink>
+      <NavLink to="/approvals/done">Done by me</NavLink>
+    </nav>}
     <ErrorNotice message={error} />
     {approvalsOnly && <DecisionNotes items={decisions} />}
     {!approvalsOnly && <div className={`filters${archives.length ? ' with-year' : ''}`}>
@@ -116,10 +123,33 @@ export function RfaListPage({ mode = 'mine' }: { mode?: ListMode }) {
       {loading && !rfas.length
         ? <ListSkeleton />
         : shown.length
-          ? <RfaTable rfas={shown} review={approvalsOnly} schoolYear={schoolYear} />
+          ? doneByMe ? <DoneTable rfas={shown as ActedRfa[]} schoolYear={schoolYear} /> : <RfaTable rfas={shown} review={approvalsOnly} schoolYear={schoolYear} />
           : <Empty title={copy.empty} text={copy.emptyText} />}
     </section>
   </>;
+}
+
+const MY_ACTION_LABELS: Record<string, string> = { APPROVED: 'Approved', RETURNED: 'Returned', DISAPPROVED: 'Disapproved' };
+
+/** "Done by me": what this approver decided, when, and where each request is now. */
+function DoneTable({ rfas, schoolYear }: { rfas: ActedRfa[]; schoolYear: string }) {
+  return <div className="table-wrap">
+    <table>
+      <thead><tr><th>RFA Number</th><th>Request</th><th>Department</th><th>Requested Amount</th><th>Your decision</th><th>Now</th><th aria-label="Action" /></tr></thead>
+      <tbody>{rfas.map((rfa) => <tr key={rfa.RFA_ID}>
+        <td data-label="RFA Number"><b>{rfa.RFA_NUMBER}</b></td>
+        <td data-label="Request"><span className="cell-primary">{rfa.REQUEST_TITLE}</span><small>{rfa.REQUESTED_BY}</small></td>
+        <td data-label="Department">{rfa.DEPARTMENT_NAME}</td>
+        <td data-label="Requested Amount">{money(rfa.REQUESTED_AMOUNT ? rfa.REQUESTED_AMOUNT / 100 : rfa.BUDGET_ALLOCATION)}</td>
+        <td data-label="Your decision">
+          <span className={`my-decision ${rfa.MY_ACTION.toLowerCase()}`}>{MY_ACTION_LABELS[rfa.MY_ACTION] ?? rfa.MY_ACTION}</span>
+          <small>{dateTime(rfa.MY_ACTION_AT)} · {stepLabel(rfa.MY_STEP)}</small>
+        </td>
+        <td data-label="Now"><StatusBadge status={rfa.STATUS} /></td>
+        <td><Link className="row-link" to={`/rfa/${rfa.RFA_ID}${schoolYear ? `?sy=${schoolYear}` : ''}`}>View <ArrowRight size={14} /></Link></td>
+      </tr>)}</tbody>
+    </table>
+  </div>;
 }
 
 /** What happened to the decisions just made: saving, done, or what went wrong. */

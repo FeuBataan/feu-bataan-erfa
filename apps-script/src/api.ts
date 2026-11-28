@@ -11,7 +11,7 @@ import { resetWorkflowCache } from './workflow';
 import { archiveYears, resetArchiveCache } from './archive';
 import { deleteRfa, resetAllRfasFromApp } from './resetRfas';
 import { maintenanceStatus } from './maintenance';
-import { allRfasScope, createRfa, dashboardRfas, decideRfa, detailRfa, downloadAttachment, eligibleApprovers, fixedRoutePreview, listDepartments, listAllRfas, listForApproval, listRfas, reassignApprovals, saveActualExpense, submitRfa, transitionCloseout, updateRfa, uploadAttachment } from './workflow';
+import { allRfasScope, createRfa, dashboardRfas, decideRfa, detailRfa, downloadAttachment, eligibleApprovers, fixedRoutePreview, listDepartments, listAllRfas, listActedByMe, listForApproval, listRfas, reassignApprovals, saveActualExpense, submitRfa, transitionCloseout, updateRfa, uploadAttachment } from './workflow';
 
 export interface ApiRequest { action: string; idToken?: string; payload?: Record<string, unknown>; performance?: boolean }
 
@@ -34,6 +34,7 @@ function dispatchRequest(request: ApiRequest): unknown {
     case 'rfa.list': return listRfas(user, payload);
     case 'rfa.all': return listAllRfas(user, payload);
     case 'rfa.forApproval': return listForApproval(user);
+    case 'rfa.actedByMe': return listActedByMe(user, payload);
     case 'rfa.detail': return detailRfa(user, String(payload.rfaId ?? ''), Number(payload.schoolYear || 0));
     case 'rfa.archives': return archiveYears();
     case 'rfa.eligibleApprovers': return eligibleApprovers(user);

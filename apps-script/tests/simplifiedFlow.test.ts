@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { commitApprovedFinancialRfa, expenseMonitoringReport, financialDetail, financialRfaFields, summarizeBudget } from '../src/budget';
 import { loadRoles, rememberFormerHolders } from '../src/roles';
-import { allRfasScope, createRfa, decideRfa, detailRfa, fixedRoutePreview, listAllRfas, listForApproval, listRfas, submitRfa, transitionCloseout } from '../src/workflow';
+import { allRfasScope, createRfa, decideRfa, detailRfa, fixedRoutePreview, listActedByMe, listAllRfas, listForApproval, listRfas, submitRfa, transitionCloseout } from '../src/workflow';
 import type { BudgetTransactionRecord, DepartmentBudgetRecord, RfaRecord, SessionUser, SheetRecord } from '../src/types';
 
 const sheets = new Map<string, SheetRecord[]>();
@@ -150,6 +150,30 @@ function commitments(rfaId: string) { return (sheets.get('BUDGET_TRANSACTIONS') 
 function userById(id: string): SessionUser {
   return (users.find((u) => String(u.USER_ID) === id) as unknown as SessionUser);
 }
+
+describe('Done by me', () => {
+  it('lists what a head decided, even while the RFA is still routing, but not their own submissions', () => {
+    const req = requesterFor('it');
+    const first = createRfa(req, input({ requestedAmount: '10000', budgetAllocation: 10000 }));
+    submitRfa(req, first.RFA_ID);
+    const second = createRfa(req, input({ requestTitle: 'Projector', requestedAmount: '5000', budgetAllocation: 5000 }));
+    submitRfa(req, second.RFA_ID);
+    const head = userById('itHead');
+    expect(listActedByMe(head, {})).toEqual([]);
+
+    acted(first.RFA_ID, head);
+    decideRfa(head, second.RFA_ID, 'RETURNED', 'Please attach a quotation.');
+
+    const done = listActedByMe(head, {});
+    expect(done.map((row) => [row.RFA_ID, row.MY_ACTION])).toEqual([[second.RFA_ID, 'RETURNED'], [first.RFA_ID, 'APPROVED']]);
+    expect(done[1].STATUS).toBe('PENDING_REVIEW'); // still routing to Reviewed and Noted
+    expect(done[1].MY_STEP).toBe('RECOMMENDING_APPROVAL');
+    expect(done[0].MY_REMARKS).toBe('Please attach a quotation.');
+    expect(listActedByMe(head, { query: 'projector' }).map((row) => row.RFA_ID)).toEqual([second.RFA_ID]);
+    expect(listActedByMe(req, {})).toEqual([]); // submitting is not a decision
+    expect(listActedByMe(userById('reviewer'), {})).toEqual([]);
+  });
+});
 
 describe('official matrix — 12 scenarios', () => {
   it('1. Non-academic, below threshold, no optionals', () => {

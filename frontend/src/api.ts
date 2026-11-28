@@ -1,10 +1,10 @@
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
 const TOKEN_KEY = 'erfa_google_id_token';
-const coalescedReads = new Set(['session', 'dashboard.home', 'dashboard.rfas', 'rfa.list', 'rfa.all', 'rfa.forApproval', 'rfa.detail', 'rfa.archives', 'rfa.eligibleApprovers', 'rfa.departments', 'rfa.fixedRoute', 'expense.monitoring', 'admin.audit', 'admin.data', 'admin.budget.summary', 'admin.budget.overview', 'admin.budget.management', 'admin.category.list', 'admin.budget.report', 'admin.budget.expenses', 'admin.budget.detail', 'budget.context']);
+const coalescedReads = new Set(['session', 'dashboard.home', 'dashboard.rfas', 'rfa.list', 'rfa.all', 'rfa.forApproval', 'rfa.actedByMe', 'rfa.detail', 'rfa.archives', 'rfa.eligibleApprovers', 'rfa.departments', 'rfa.fixedRoute', 'expense.monitoring', 'admin.audit', 'admin.data', 'admin.budget.summary', 'admin.budget.overview', 'admin.budget.management', 'admin.category.list', 'admin.budget.report', 'admin.budget.expenses', 'admin.budget.detail', 'budget.context']);
 const pendingReads = new Map<string, Promise<unknown>>();
 // Short-lived cache for list/lookup reads so moving between pages is instant.
 // Any write (non-read action) or sign-out clears it, so users never act on stale data after their own changes.
-const cachedReads = new Set(['dashboard.home', 'dashboard.rfas', 'rfa.list', 'rfa.all', 'rfa.archives', 'rfa.forApproval', 'rfa.departments', 'rfa.fixedRoute', 'admin.category.list', 'budget.context']);
+const cachedReads = new Set(['dashboard.home', 'dashboard.rfas', 'rfa.list', 'rfa.all', 'rfa.archives', 'rfa.forApproval', 'rfa.actedByMe', 'rfa.departments', 'rfa.fixedRoute', 'admin.category.list', 'budget.context']);
 const READ_CACHE_TTL_MS = 30_000;
 const readCache = new Map<string, { at: number; data: unknown }>();
 export function clearReadCache(): void { readCache.clear(); }
@@ -64,7 +64,7 @@ function persistSoon(): void {
  * on screen (they refresh in the background) but drops that RFA's own page and the dashboard;
  * a decision also takes the RFA off For My Action at once. Any other change forgets everything.
  */
-const LIST_READS = new Set(['rfa.list', 'rfa.all', 'rfa.forApproval', 'dashboard.rfas']);
+const LIST_READS = new Set(['rfa.list', 'rfa.all', 'rfa.forApproval', 'rfa.actedByMe', 'dashboard.rfas']);
 const DECISIONS = new Set(['rfa.approve', 'rfa.return', 'rfa.disapprove']);
 function forgetAfterChange(action: string, payload: Record<string, unknown>): void {
   const rfaId = typeof payload.rfaId === 'string' ? payload.rfaId : '';

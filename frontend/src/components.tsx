@@ -180,7 +180,7 @@ export function Layout() {
   if (!user) return null;
   const pendingLabel = pending > 0 ? `${pending} request${pending === 1 ? '' : 's'} awaiting your action` : '';
   const canSeeAll = user.ALL_RFAS_SCOPE === 'all' || user.ALL_RFAS_SCOPE === 'approved';
-  const pageTitle = pathname === '/' ? 'Dashboard' : pathname === '/rfas' ? 'My RFAs' : pathname === '/all-rfas' ? 'All RFAs' : pathname === '/rfa/new' ? 'Create RFA' : pathname === '/approvals' ? 'For My Action' : pathname === '/admin' ? 'Administration' : pathname.startsWith('/admin/expense-monitoring') || pathname.startsWith('/admin/budgets') ? 'Expense Monitoring' : pathname.startsWith('/admin/expense-reports') || pathname.startsWith('/admin/budget-reports') ? 'Expense Reports' : pathname.startsWith('/rfa/') ? 'RFA Detail' : 'Electronic Request for Approval';
+  const pageTitle = pathname === '/' ? 'Dashboard' : pathname === '/rfas' ? 'My RFAs' : pathname === '/all-rfas' ? 'All RFAs' : pathname === '/rfa/new' ? 'Create RFA' : pathname.startsWith('/approvals') ? 'For My Action' : pathname === '/admin' ? 'Administration' : pathname.startsWith('/admin/expense-monitoring') || pathname.startsWith('/admin/budgets') ? 'Expense Monitoring' : pathname.startsWith('/admin/expense-reports') || pathname.startsWith('/admin/budget-reports') ? 'Expense Reports' : pathname.startsWith('/rfa/') ? 'RFA Detail' : 'Electronic Request for Approval';
 
   return <div className="app-shell">
     <aside className="sidebar">

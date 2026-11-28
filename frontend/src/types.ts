@@ -21,6 +21,8 @@ export interface Rfa {
   EXPENSE_CLASSIFICATION?: string; INVOLVED_DEPARTMENT_ID?: string; INVOLVED_DEPARTMENT_NAME?: string;
   PURCHASE_REQUEST?: boolean; RECOMMENDING_ALTERNATE_USER_ID?: string; RECOMMENDING_ALTERNATE_NAME?: string; INCLUDE_PRINCIPAL?: boolean; INCLUDE_PROCUREMENT?: boolean; INVOLVED_DEPARTMENT_IDS?: string;
 }
+/** An RFA in "Done by me", with this approver's own latest decision on it. */
+export interface ActedRfa extends Rfa { MY_ACTION: string; MY_ACTION_AT: string; MY_STEP: string; MY_REMARKS: string }
 export interface Approval { APPROVAL_ID: string; STEP: ApprovalStep; APPROVER_USER_ID: string; APPROVER_NAME: string; APPROVER_EMAIL: string; ACTION: string; REMARKS: string; TIMESTAMP: string }
 export interface EligibleApprover { USER_ID: string; FULL_NAME: string; EMAIL: string; POSITION: string; DEPARTMENT: string }
 export type ApprovalAssignments = Record<ApprovalSection, string[]>;
